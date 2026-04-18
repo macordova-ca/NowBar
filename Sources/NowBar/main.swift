@@ -44,6 +44,12 @@ final class AppSettings: ObservableObject {
     @Published var accentFromArt: Bool { didSet { save() } }
     @Published var toastEnabled: Bool { didSet { save() } }
     @Published var toastPosition: String { didSet { save() } }
+    @Published var statsAsked: Bool { didSet { save() } }
+    @Published var statsEnabled: Bool { didSet { save() } }
+    @Published var statsPlayCount: Bool { didSet { save() } }
+    @Published var statsSkipCount: Bool { didSet { save() } }
+    @Published var statsDailyMinutes: Bool { didSet { save() } }
+    @Published var statsArtistPlays: Bool { didSet { save() } }
 
     init() {
         let d = UserDefaults.standard
@@ -57,6 +63,12 @@ final class AppSettings: ObservableObject {
         accentFromArt = d.object(forKey: "accentFromArt") as? Bool ?? false
         toastEnabled = d.object(forKey: "toastEnabled") as? Bool ?? false
         toastPosition = d.string(forKey: "toastPosition") ?? "bottomRight"
+        statsAsked = d.object(forKey: "statsAsked") as? Bool ?? false
+        statsEnabled = d.object(forKey: "statsEnabled") as? Bool ?? false
+        statsPlayCount = d.object(forKey: "statsPlayCount") as? Bool ?? true
+        statsSkipCount = d.object(forKey: "statsSkipCount") as? Bool ?? true
+        statsDailyMinutes = d.object(forKey: "statsDailyMinutes") as? Bool ?? true
+        statsArtistPlays = d.object(forKey: "statsArtistPlays") as? Bool ?? true
     }
 
     private func save() {
@@ -71,33 +83,103 @@ final class AppSettings: ObservableObject {
         d.set(accentFromArt, forKey: "accentFromArt")
         d.set(toastEnabled, forKey: "toastEnabled")
         d.set(toastPosition, forKey: "toastPosition")
+        d.set(statsAsked, forKey: "statsAsked")
+        d.set(statsEnabled, forKey: "statsEnabled")
+        d.set(statsPlayCount, forKey: "statsPlayCount")
+        d.set(statsSkipCount, forKey: "statsSkipCount")
+        d.set(statsDailyMinutes, forKey: "statsDailyMinutes")
+        d.set(statsArtistPlays, forKey: "statsArtistPlays")
     }
 }
 
-// MARK: - Liked store
+// MARK: - Stats store
 
-final class LikedStore: ObservableObject {
-    @Published private(set) var keys: Set<String>
-
-    init() {
-        let arr = UserDefaults.standard.stringArray(forKey: "likedKeys") ?? []
-        keys = Set(arr)
+final class StatsStore: ObservableObject {
+    struct Data: Codable {
+        var plays: [String: Int] = [:]
+        var skips: [String: Int] = [:]
+        var artistPlays: [String: Int] = [:]
+        var dailyMinutes: [String: Double] = [:]
     }
 
-    func isLiked(_ t: SpotifyTrack) -> Bool {
-        !t.isOff && keys.contains(Self.key(t))
+    @Published private(set) var data = Data()
+    private var currentKey: String = ""
+    private var currentArtist: String = ""
+    private var currentSeconds: Double = 0
+    weak var settings: AppSettings?
+
+    init() { load() }
+
+    func tick(_ t: SpotifyTrack) {
+        guard let s = settings, s.statsEnabled, !t.isOff, t.isPlaying else { return }
+        let key = Self.trackKey(t)
+        if key != currentKey {
+            commit()
+            currentKey = key
+            currentArtist = t.artist
+            currentSeconds = 0
+        }
+        currentSeconds += 1
+        if s.statsDailyMinutes {
+            let day = Self.todayKey()
+            data.dailyMinutes[day, default: 0] += 1.0 / 60.0
+        }
+        save()
     }
 
-    func toggle(_ t: SpotifyTrack) {
-        guard !t.isOff else { return }
-        let k = Self.key(t)
-        if keys.contains(k) { keys.remove(k) } else { keys.insert(k) }
-        UserDefaults.standard.set(Array(keys), forKey: "likedKeys")
-        SpotifyAPI.toggleLike()
+    func trackChanged(to t: SpotifyTrack) {
+        commit()
+        currentKey = t.isOff ? "" : Self.trackKey(t)
+        currentArtist = t.artist
+        currentSeconds = 0
     }
 
-    private static func key(_ t: SpotifyTrack) -> String {
-        "\(t.name)—\(t.artist)"
+    private func commit() {
+        guard let s = settings, s.statsEnabled, !currentKey.isEmpty else { return }
+        if currentSeconds >= 30 {
+            if s.statsPlayCount { data.plays[currentKey, default: 0] += 1 }
+            if s.statsArtistPlays, !currentArtist.isEmpty {
+                data.artistPlays[currentArtist, default: 0] += 1
+            }
+        } else if currentSeconds > 0, s.statsSkipCount {
+            data.skips[currentKey, default: 0] += 1
+        }
+        save()
+    }
+
+    private static func trackKey(_ t: SpotifyTrack) -> String { "\(t.name)—\(t.artist)" }
+
+    private static func todayKey() -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        return fmt.string(from: Date())
+    }
+
+    private static var fileURL: URL {
+        let fm = FileManager.default
+        let base = try! fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                               appropriateFor: nil, create: true)
+        let dir = base.appendingPathComponent("NowBar", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("stats.json")
+    }
+
+    private func load() {
+        guard let raw = try? Foundation.Data(contentsOf: Self.fileURL) else { return }
+        if let decoded = try? JSONDecoder().decode(Data.self, from: raw) {
+            data = decoded
+        }
+    }
+
+    private func save() {
+        if let enc = try? JSONEncoder().encode(data) {
+            try? enc.write(to: Self.fileURL, options: .atomic)
+        }
+    }
+
+    func reset() {
+        data = Data()
+        save()
     }
 }
 
@@ -163,20 +245,7 @@ enum SpotifyAPI {
         _ = run("tell application \"Spotify\" to set repeating to \(on ? "true" : "false")")
     }
 
-    static func toggleLike() {
-        let source = """
-        tell application "System Events"
-          if exists (process "Spotify") then
-            tell process "Spotify"
-              keystroke "b" using {option down, shift down}
-            end tell
-          end if
-        end tell
-        """
-        _ = run(source)
-    }
-
-    static func seek(_ seconds: Double) {
+static func seek(_ seconds: Double) {
         _ = run("tell application \"Spotify\" to set player position to \(seconds)")
     }
 
@@ -218,7 +287,7 @@ final class SpotifyState: ObservableObject {
 
 // MARK: - UI state
 
-enum PanelMode { case player, settings, contextMenu }
+enum PanelMode { case player, settings, contextMenu, stats, statsData }
 
 final class UIState: ObservableObject {
     @Published var mode: PanelMode = .player
@@ -230,19 +299,31 @@ struct RootView: View {
     @ObservedObject var state: SpotifyState
     @ObservedObject var settings: AppSettings
     @ObservedObject var ui: UIState
-    @ObservedObject var liked: LikedStore
+    @ObservedObject var stats: StatsStore
     let onQuit: () -> Void
 
     var body: some View {
         switch ui.mode {
         case .player:
-            PopoverView(state: state, settings: settings, liked: liked)
+            PopoverView(state: state, settings: settings)
         case .settings:
-            SettingsView(settings: settings)
+            SettingsView(settings: settings, onOpenStats: { ui.mode = .stats })
         case .contextMenu:
             ContextMenuView(
                 onSettings: { ui.mode = .settings },
                 onQuit: onQuit
+            )
+        case .stats:
+            StatsView(
+                settings: settings,
+                stats: stats,
+                onBack: { ui.mode = .settings },
+                onView: { ui.mode = .statsData }
+            )
+        case .statsData:
+            StatsDashboardView(
+                stats: stats,
+                onBack: { ui.mode = .stats }
             )
         }
     }
@@ -464,7 +545,6 @@ struct MarqueeText: View {
 struct PopoverView: View {
     @ObservedObject var state: SpotifyState
     @ObservedObject var settings: AppSettings
-    @ObservedObject var liked: LikedStore
     @State private var accent: Color? = nil
 
     var body: some View {
@@ -522,12 +602,6 @@ struct PopoverView: View {
                                 ControlButton(system: "repeat", active: t.repeating) {
                                     SpotifyAPI.toggleRepeat(!t.repeating)
                                     state.refresh()
-                                }
-                                ControlButton(
-                                    system: liked.isLiked(t) ? "heart.fill" : "heart",
-                                    active: liked.isLiked(t)
-                                ) {
-                                    liked.toggle(t)
                                 }
                             }
                         }
@@ -807,6 +881,7 @@ struct SettingsRow: View {
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
+    let onOpenStats: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -839,10 +914,130 @@ struct SettingsView: View {
                     .frame(width: 110)
                 }
             }
+            Divider()
+            NavRow(label: "Stats", action: onOpenStats)
         }
         .font(.system(size: 11))
         .padding(12)
         .frame(width: 220)
+    }
+}
+
+struct NavRow: View {
+    let label: String
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(label)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(hover ? Color.primary.opacity(0.08) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+    }
+}
+
+struct StatsView: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var stats: StatsStore
+    let onBack: () -> Void
+    let onView: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                Text("Stats")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            Divider()
+
+            if !settings.statsAsked {
+                firstTimePrompt
+            } else {
+                SettingsRow(label: "Enable stats", value: $settings.statsEnabled)
+                if settings.statsEnabled {
+                    Divider()
+                    Text("Tracking")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    SettingsRow(label: "Play count per song", value: $settings.statsPlayCount)
+                    SettingsRow(label: "Skip count per song", value: $settings.statsSkipCount)
+                    SettingsRow(label: "Minutes per day", value: $settings.statsDailyMinutes)
+                    SettingsRow(label: "Plays per artist", value: $settings.statsArtistPlays)
+                    Divider()
+                    NavRow(label: "View stats", action: onView)
+                    Divider()
+                    Text("Data stored locally only")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                    Button(action: { stats.reset() }) {
+                        Text("Clear all stats")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .font(.system(size: 11))
+        .padding(12)
+        .frame(width: 240)
+    }
+
+    private var firstTimePrompt: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Enable listening stats?")
+                .font(.system(size: 12, weight: .semibold))
+            Text("Track play counts, skips, minutes per day, and per-artist plays. Data stays on this Mac — nothing leaves the device.")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button(action: {
+                    settings.statsEnabled = true
+                    settings.statsAsked = true
+                }) {
+                    Text("Enable")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.green))
+                }
+                .buttonStyle(.plain)
+                Button(action: {
+                    settings.statsEnabled = false
+                    settings.statsAsked = true
+                }) {
+                    Text("Not now")
+                        .font(.system(size: 11))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.15)))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 4)
+        }
     }
 }
 
@@ -861,10 +1056,15 @@ struct ToastView: View {
                     Rectangle().fill(.quaternary)
                 }
             }
-            .frame(width: 42, height: 42)
+            .frame(width: 46, height: 46)
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Now Playing…")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
                 Text(track.name)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
@@ -876,7 +1076,7 @@ struct ToastView: View {
             Spacer(minLength: 0)
         }
         .padding(10)
-        .frame(width: 260)
+        .frame(width: 270)
     }
 }
 
@@ -976,6 +1176,163 @@ final class ToastController {
     }
 }
 
+// MARK: - Stats dashboard
+
+struct StatsDashboardView: View {
+    @ObservedObject var stats: StatsStore
+    let onBack: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                Text("Your Stats")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            Divider()
+
+            if isEmpty {
+                Text("No data yet. Keep listening — stats will appear here.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            } else {
+                summary
+                Divider()
+                if !topTracks.isEmpty {
+                    sectionTitle("Top tracks")
+                    ForEach(Array(topTracks.enumerated()), id: \.offset) { idx, item in
+                        rankRow(rank: idx + 1, title: item.0, value: "\(item.1)")
+                    }
+                    Divider()
+                }
+                if !topArtists.isEmpty {
+                    sectionTitle("Top artists")
+                    ForEach(Array(topArtists.enumerated()), id: \.offset) { idx, item in
+                        rankRow(rank: idx + 1, title: item.0, value: "\(item.1)")
+                    }
+                    Divider()
+                }
+                if !last7.isEmpty {
+                    sectionTitle("Last 7 days")
+                    dailyChart
+                }
+            }
+        }
+        .font(.system(size: 11))
+        .padding(12)
+        .frame(width: 300)
+    }
+
+    private var isEmpty: Bool {
+        stats.data.plays.isEmpty &&
+        stats.data.skips.isEmpty &&
+        stats.data.artistPlays.isEmpty &&
+        stats.data.dailyMinutes.isEmpty
+    }
+
+    private var summary: some View {
+        HStack(spacing: 12) {
+            statCard(label: "Plays", value: "\(stats.data.plays.values.reduce(0,+))")
+            statCard(label: "Skips", value: "\(stats.data.skips.values.reduce(0,+))")
+            statCard(label: "Minutes", value: String(format: "%.0f", stats.data.dailyMinutes.values.reduce(0,+)))
+        }
+    }
+
+    private func statCard(label: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 16, weight: .semibold))
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .tracking(0.5)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.06)))
+    }
+
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .tracking(0.5)
+    }
+
+    private func rankRow(rank: Int, title: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Text("\(rank).")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 18, alignment: .trailing)
+            Text(title)
+                .font(.system(size: 11))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(value)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var topTracks: [(String, Int)] {
+        stats.data.plays.sorted { $0.value > $1.value }.prefix(5).map { ($0.key, $0.value) }
+    }
+
+    private var topArtists: [(String, Int)] {
+        stats.data.artistPlays.sorted { $0.value > $1.value }.prefix(5).map { ($0.key, $0.value) }
+    }
+
+    private var last7: [(String, Double)] {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        return (0..<7).reversed().map { i -> (String, Double) in
+            let d = cal.date(byAdding: .day, value: -i, to: today)!
+            let key = fmt.string(from: d)
+            return (key, stats.data.dailyMinutes[key] ?? 0)
+        }
+    }
+
+    private var dailyChart: some View {
+        let days = last7
+        let maxVal = max(days.map { $0.1 }.max() ?? 0, 1)
+        return HStack(alignment: .bottom, spacing: 4) {
+            ForEach(Array(days.enumerated()), id: \.offset) { _, entry in
+                VStack(spacing: 3) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.green.opacity(0.8))
+                        .frame(height: max(2, CGFloat(entry.1 / maxVal) * 60))
+                    Text(shortDay(entry.0))
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(height: 78)
+    }
+
+    private func shortDay(_ iso: String) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        guard let d = fmt.date(from: iso) else { return "" }
+        let out = DateFormatter()
+        out.dateFormat = "E"
+        return String(out.string(from: d).prefix(2))
+    }
+}
+
 // MARK: - Container with dynamic border
 
 final class PanelContainerView: NSView {
@@ -994,7 +1351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let state = SpotifyState()
     private let settings = AppSettings()
     private let ui = UIState()
-    private let liked = LikedStore()
+    private let stats = StatsStore()
     private let toast = ToastController()
     private var refreshTimer: Timer?
     private var tickTimer: Timer?
@@ -1002,6 +1359,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var modeCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        stats.settings = settings
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "♪ —"
         statusItem.button?.target = self
@@ -1012,13 +1371,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state: state,
             settings: settings,
             ui: ui,
-            liked: liked,
+            stats: stats,
             onQuit: { NSApp.terminate(nil) }
         ))
 
         state.onTrackChange = { [weak self] track in
-            guard let self, self.settings.toastEnabled else { return }
-            self.toast.show(track: track, position: self.settings.toastPosition)
+            guard let self else { return }
+            self.stats.trackChanged(to: track)
+            if self.settings.toastEnabled {
+                self.toast.show(track: track, position: self.settings.toastPosition)
+            }
         }
         hosting.sizingOptions = [.preferredContentSize]
 
@@ -1065,7 +1427,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         tickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            self?.state.tickPosition()
+            guard let self else { return }
+            self.state.tickPosition()
+            self.stats.tick(self.state.track)
         }
 
         DistributedNotificationCenter.default().addObserver(
