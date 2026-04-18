@@ -21,9 +21,10 @@ struct SpotifyTrack: Equatable {
     var barTitle: String {
         if isOff { return "♪ —" }
         let icon = isPlaying ? "♪" : "⏸"
-        let maxLen = 25
-        let shortName = name.count > maxLen ? String(name.prefix(maxLen)) + "…" : name
-        return "\(icon) \(shortName) - \(artist)"
+        let combined = "\(name) - \(artist)"
+        let maxLen = 30
+        let shortened = combined.count > maxLen ? String(combined.prefix(maxLen)) + "…" : combined
+        return "\(icon) \(shortened)"
     }
 }
 
@@ -150,8 +151,10 @@ final class SpotifyState: ObservableObject {
 
 // MARK: - UI state
 
+enum PanelMode { case player, settings, contextMenu }
+
 final class UIState: ObservableObject {
-    @Published var showingSettings = false
+    @Published var mode: PanelMode = .player
 }
 
 // MARK: - Root view
@@ -160,12 +163,145 @@ struct RootView: View {
     @ObservedObject var state: SpotifyState
     @ObservedObject var settings: AppSettings
     @ObservedObject var ui: UIState
+    let onQuit: () -> Void
 
     var body: some View {
-        if ui.showingSettings {
-            SettingsView(settings: settings)
-        } else {
+        switch ui.mode {
+        case .player:
             PopoverView(state: state, settings: settings)
+        case .settings:
+            SettingsView(settings: settings)
+        case .contextMenu:
+            ContextMenuView(
+                onSettings: { ui.mode = .settings },
+                onQuit: onQuit
+            )
+        }
+    }
+}
+
+// MARK: - Context menu view
+
+struct ContextMenuView: View {
+    let onSettings: () -> Void
+    let onQuit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            MenuRow(icon: "gearshape", label: "Settings", action: onSettings)
+            Divider().padding(.vertical, 2)
+            MenuRow(icon: "power", label: "Quit NowBar", action: onQuit)
+        }
+        .padding(6)
+        .frame(width: 170)
+    }
+}
+
+struct MenuRow: View {
+    let icon: String
+    let label: String
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .frame(width: 14)
+                Text(label)
+                    .font(.system(size: 12))
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(hover ? Color.primary.opacity(0.12) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+    }
+}
+
+// MARK: - Marquee text
+
+struct MarqueeText: View {
+    let text: String
+    let font: Font
+
+    @State private var textWidth: CGFloat = 0
+    @State private var containerWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+    @State private var runID = UUID()
+
+    private let gap: CGFloat = 40
+    private let speed: Double = 30
+    private let pause: Double = 1.2
+
+    var body: some View {
+        Text(" ")
+            .font(font)
+            .lineLimit(1)
+            .opacity(0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(marquee, alignment: .leading)
+            .background(containerReader)
+            .clipped()
+            .onChange(of: text) { _, _ in restart() }
+            .onChange(of: textWidth) { _, _ in restart() }
+            .onChange(of: containerWidth) { _, _ in restart() }
+    }
+
+    private var marquee: some View {
+        let needsScroll = textWidth > containerWidth + 0.5
+        return HStack(spacing: gap) {
+            Text(text)
+                .font(font)
+                .lineLimit(1)
+                .fixedSize()
+                .background(textReader)
+            if needsScroll {
+                Text(text)
+                    .font(font)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .offset(x: needsScroll ? offset : 0)
+    }
+
+    private var textReader: some View {
+        GeometryReader { g in
+            Color.clear
+                .onAppear { textWidth = g.size.width }
+                .onChange(of: g.size.width) { _, w in textWidth = w }
+        }
+    }
+
+    private var containerReader: some View {
+        GeometryReader { g in
+            Color.clear
+                .onAppear { containerWidth = g.size.width }
+                .onChange(of: g.size.width) { _, w in containerWidth = w }
+        }
+    }
+
+    private func restart() {
+        let needsScroll = textWidth > containerWidth + 0.5
+        offset = 0
+        runID = UUID()
+        let id = runID
+        guard needsScroll else { return }
+        let distance = textWidth + gap
+        let duration = Double(distance) / speed
+        DispatchQueue.main.asyncAfter(deadline: .now() + pause) {
+            guard id == runID else { return }
+            withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
+                offset = -distance
+            }
         }
     }
 }
@@ -203,22 +339,15 @@ struct PopoverView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             if settings.showTitle {
-                                Text(t.name)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
+                                MarqueeText(text: t.name, font: .system(size: 13, weight: .semibold))
                             }
                             if settings.showArtist {
-                                Text(t.artist)
-                                    .font(.system(size: 11))
+                                MarqueeText(text: t.artist, font: .system(size: 11))
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(1)
                             }
                             if settings.showAlbum {
-                                Text(t.album)
-                                    .font(.system(size: 10))
+                                MarqueeText(text: t.album, font: .system(size: 10))
                                     .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
                                     .padding(.bottom, 8)
                             }
 
@@ -241,6 +370,7 @@ struct PopoverView: View {
                                 }
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                         if settings.showVolume {
                             VerticalVolumeSlider(state: state)
@@ -252,7 +382,7 @@ struct PopoverView: View {
                     }
                 }
                 .padding(12)
-                .fixedSize(horizontal: true, vertical: false)
+                .frame(width: 360)
             }
         }
     }
@@ -488,16 +618,28 @@ struct SettingsView: View {
     }
 }
 
+// MARK: - Container with dynamic border
+
+final class PanelContainerView: NSView {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.borderColor = NSColor.separatorColor.cgColor
+    }
+}
+
 // MARK: - App delegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private var popover: NSPopover!
+    private var panel: NSPanel!
+    private var hosting: NSHostingController<RootView>!
     private let state = SpotifyState()
     private let settings = AppSettings()
     private let ui = UIState()
     private var refreshTimer: Timer?
     private var tickTimer: Timer?
+    private var outsideClickMonitor: Any?
+    private var modeCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -506,11 +648,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.action = #selector(handleClick(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
-        popover = NSPopover()
-        popover.behavior = .transient
-        let hosting = NSHostingController(rootView: RootView(state: state, settings: settings, ui: ui))
+        hosting = NSHostingController(rootView: RootView(
+            state: state,
+            settings: settings,
+            ui: ui,
+            onQuit: { NSApp.terminate(nil) }
+        ))
         hosting.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = hosting
+
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 384, height: 200),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+
+        let container = PanelContainerView(frame: NSRect(x: 0, y: 0, width: 384, height: 200))
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 12
+        container.layer?.cornerCurve = .continuous
+        container.layer?.masksToBounds = true
+        container.layer?.borderWidth = 0.5
+        container.layer?.borderColor = NSColor.separatorColor.cgColor
+
+        let vibrant = NSVisualEffectView(frame: container.bounds)
+        vibrant.material = .menu
+        vibrant.blendingMode = .behindWindow
+        vibrant.state = .active
+        vibrant.autoresizingMask = [.width, .height]
+
+        hosting.view.frame = vibrant.bounds
+        hosting.view.autoresizingMask = [.width, .height]
+        vibrant.addSubview(hosting.view)
+
+        container.addSubview(vibrant)
+        panel.contentView = container
 
         state.refresh()
         updateBarTitle()
@@ -530,6 +708,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: NSNotification.Name("com.spotify.client.PlaybackStateChanged"),
             object: nil
         )
+
+        modeCancellable = ui.$mode
+            .dropFirst()
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.resizePanelForMode() }
+            }
     }
 
     @objc private func spotifyChanged() {
@@ -546,54 +730,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func handleClick(_ sender: Any?) {
         let event = NSApp.currentEvent
         if event?.type == .rightMouseUp {
-            showContextMenu()
+            if panel.isVisible && ui.mode == .contextMenu {
+                hidePanel()
+            } else {
+                ui.mode = .contextMenu
+                if panel.isVisible {
+                    resizePanelForMode()
+                } else {
+                    showPanel()
+                }
+            }
         } else {
-            togglePopover(sender)
+            togglePanel()
         }
     }
 
-    private func showContextMenu() {
-        let menu = NSMenu()
-        menu.delegate = self
-        let item = NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: ",")
-        item.target = self
-        menu.addItem(item)
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit NowBar", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-        statusItem.menu = menu
-        statusItem.button?.performClick(nil)
-    }
-
-    func menuDidClose(_ menu: NSMenu) {
-        statusItem.menu = nil
-    }
-
-    @objc private func openSettings() {
-        ui.showingSettings = true
-        showPopover()
-    }
-
-    @objc private func quit() {
-        NSApp.terminate(nil)
-    }
-
-    private func togglePopover(_ sender: Any?) {
-        if popover.isShown {
-            popover.performClose(sender)
+    private func togglePanel() {
+        if panel.isVisible {
+            hidePanel()
         } else {
-            ui.showingSettings = false
-            showPopover()
+            ui.mode = .player
+            showPanel()
         }
     }
 
-    private func showPopover() {
-        guard let button = statusItem.button else { return }
+    private func showPanel() {
+        guard let button = statusItem.button,
+              let buttonWindow = button.window else { return }
         state.refresh()
         updateBarTitle()
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+
+        hosting.view.layoutSubtreeIfNeeded()
+        let size = hosting.view.fittingSize
+        panel.setContentSize(size)
+
+        let buttonFrameInWindow = button.convert(button.bounds, to: nil)
+        let buttonFrameInScreen = buttonWindow.convertToScreen(buttonFrameInWindow)
+
+        let targetX = buttonFrameInScreen.midX - size.width / 2
+        let targetY = buttonFrameInScreen.minY - size.height - 6
+
+        panel.alphaValue = 0
+        panel.setFrameOrigin(NSPoint(x: targetX, y: targetY + 10))
+        panel.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+            panel.animator().setFrameOrigin(NSPoint(x: targetX, y: targetY))
+        }
+
+        installOutsideClickMonitor()
+    }
+
+    private func resizePanelForMode() {
+        guard panel.isVisible,
+              let button = statusItem.button,
+              let buttonWindow = button.window else { return }
+        hosting.view.layoutSubtreeIfNeeded()
+        let size = hosting.view.fittingSize
+        let buttonFrameInScreen = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
+        let x = buttonFrameInScreen.midX - size.width / 2
+        let y = buttonFrameInScreen.minY - size.height - 6
+        let targetFrame = NSRect(origin: NSPoint(x: x, y: y), size: size)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.1
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(targetFrame, display: true)
+        }
+    }
+
+    private func hidePanel() {
+        removeOutsideClickMonitor()
+        let origin = panel.frame.origin
+        NSAnimationContext.runAnimationGroup({ [weak self] ctx in
+            guard let self else { return }
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            self.panel.animator().alphaValue = 0
+            self.panel.animator().setFrameOrigin(NSPoint(x: origin.x, y: origin.y + 8))
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            self.panel.orderOut(nil)
+            self.panel.alphaValue = 1
+            self.panel.setFrameOrigin(origin)
+        })
+    }
+
+    private func installOutsideClickMonitor() {
+        removeOutsideClickMonitor()
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            self?.hidePanel()
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let m = outsideClickMonitor {
+            NSEvent.removeMonitor(m)
+            outsideClickMonitor = nil
+        }
     }
 }
 
