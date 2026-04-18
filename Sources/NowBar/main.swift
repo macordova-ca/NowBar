@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 import Combine
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 // MARK: - Model
 
@@ -11,12 +13,13 @@ struct SpotifyTrack: Equatable {
     var artUrl: String
     var isPlaying: Bool
     var shuffling: Bool
+    var repeating: Bool
     var volume: Int
     var position: Double
     var duration: Double
     var isOff: Bool
 
-    static let off = SpotifyTrack(name: "", artist: "", album: "", artUrl: "", isPlaying: false, shuffling: false, volume: 50, position: 0, duration: 0, isOff: true)
+    static let off = SpotifyTrack(name: "", artist: "", album: "", artUrl: "", isPlaying: false, shuffling: false, repeating: false, volume: 50, position: 0, duration: 0, isOff: true)
 
     var barTitle: String {
         if isOff { return "♪ —" }
@@ -37,6 +40,8 @@ final class AppSettings: ObservableObject {
     @Published var showAlbum: Bool { didSet { save() } }
     @Published var showVolume: Bool { didSet { save() } }
     @Published var showProgress: Bool { didSet { save() } }
+    @Published var vinylEnabled: Bool { didSet { save() } }
+    @Published var accentFromArt: Bool { didSet { save() } }
 
     init() {
         let d = UserDefaults.standard
@@ -46,6 +51,8 @@ final class AppSettings: ObservableObject {
         showAlbum = d.object(forKey: "showAlbum") as? Bool ?? true
         showVolume = d.object(forKey: "showVolume") as? Bool ?? true
         showProgress = d.object(forKey: "showProgress") as? Bool ?? true
+        vinylEnabled = d.object(forKey: "vinylEnabled") as? Bool ?? false
+        accentFromArt = d.object(forKey: "accentFromArt") as? Bool ?? false
     }
 
     private func save() {
@@ -56,6 +63,8 @@ final class AppSettings: ObservableObject {
         d.set(showAlbum, forKey: "showAlbum")
         d.set(showVolume, forKey: "showVolume")
         d.set(showProgress, forKey: "showProgress")
+        d.set(vinylEnabled, forKey: "vinylEnabled")
+        d.set(accentFromArt, forKey: "accentFromArt")
     }
 }
 
@@ -73,10 +82,11 @@ enum SpotifyAPI {
               set u to artwork url of current track
               set s to player state as string
               set sh to shuffling as string
+              set rp to repeating as string
               set v to sound volume as string
               set p to (player position) as string
               set d to ((duration of current track) / 1000) as string
-              return t & "§" & a & "§" & al & "§" & u & "§" & s & "§" & sh & "§" & v & "§" & p & "§" & d
+              return t & "§" & a & "§" & al & "§" & u & "§" & s & "§" & sh & "§" & rp & "§" & v & "§" & p & "§" & d
             on error
               return "off"
             end try
@@ -87,7 +97,7 @@ enum SpotifyAPI {
         """
         guard let raw = run(script), raw != "off" else { return .off }
         let parts = raw.components(separatedBy: "§")
-        guard parts.count == 9 else { return .off }
+        guard parts.count == 10 else { return .off }
         return SpotifyTrack(
             name: parts[0],
             artist: parts[1],
@@ -95,9 +105,10 @@ enum SpotifyAPI {
             artUrl: parts[3],
             isPlaying: parts[4] == "playing",
             shuffling: parts[5] == "true",
-            volume: Int(parts[6]) ?? 50,
-            position: parseNumber(parts[7]),
-            duration: parseNumber(parts[8]),
+            repeating: parts[6] == "true",
+            volume: Int(parts[7]) ?? 50,
+            position: parseNumber(parts[8]),
+            duration: parseNumber(parts[9]),
             isOff: false
         )
     }
@@ -113,6 +124,10 @@ enum SpotifyAPI {
 
     static func toggleShuffle(_ on: Bool) {
         _ = run("tell application \"Spotify\" to set shuffling to \(on ? "true" : "false")")
+    }
+
+    static func toggleRepeat(_ on: Bool) {
+        _ = run("tell application \"Spotify\" to set repeating to \(on ? "true" : "false")")
     }
 
     static func seek(_ seconds: Double) {
@@ -226,6 +241,91 @@ struct MenuRow: View {
     }
 }
 
+// MARK: - Dominant color
+
+enum ImageColor {
+    private static var cache: [String: Color] = [:]
+
+    static func dominant(urlString: String) async -> Color? {
+        if let c = cache[urlString] { return c }
+        guard let url = URL(string: urlString) else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let nsImage = NSImage(data: data),
+              let tiff = nsImage.tiffRepresentation,
+              let ciImage = CIImage(data: tiff) else { return nil }
+        let filter = CIFilter.areaAverage()
+        filter.inputImage = ciImage
+        filter.extent = ciImage.extent
+        guard let output = filter.outputImage else { return nil }
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        let ctx = CIContext(options: [.workingColorSpace: NSNull()])
+        ctx.render(output,
+                   toBitmap: &bitmap,
+                   rowBytes: 4,
+                   bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                   format: .RGBA8,
+                   colorSpace: nil)
+        let color = Color(
+            red: Double(bitmap[0]) / 255.0,
+            green: Double(bitmap[1]) / 255.0,
+            blue: Double(bitmap[2]) / 255.0
+        )
+        cache[urlString] = color
+        return color
+    }
+}
+
+// MARK: - Album art view
+
+struct AlbumArtView: View {
+    let url: String
+    let isPlaying: Bool
+    let vinyl: Bool
+    let size: CGFloat
+
+    @State private var angle: Double = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        ZStack {
+            AsyncImage(url: URL(string: url)) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().aspectRatio(contentMode: .fill)
+                default:
+                    Rectangle().fill(.quaternary)
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(vinyl ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8)))
+            .rotationEffect(.degrees(vinyl ? angle : 0))
+
+            if vinyl {
+                Circle()
+                    .fill(Color.black.opacity(0.85))
+                    .frame(width: size * 0.22, height: size * 0.22)
+                    .overlay(
+                        Circle()
+                            .fill(Color.white.opacity(0.9))
+                            .frame(width: size * 0.05, height: size * 0.05)
+                    )
+            }
+        }
+        .onAppear { updateTimer() }
+        .onDisappear { timer?.invalidate() }
+        .onChange(of: isPlaying) { _, _ in updateTimer() }
+        .onChange(of: vinyl) { _, _ in updateTimer() }
+    }
+
+    private func updateTimer() {
+        timer?.invalidate()
+        guard vinyl, isPlaying else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { _ in
+            angle = angle.truncatingRemainder(dividingBy: 360) + 0.8
+        }
+    }
+}
+
 // MARK: - Marquee text
 
 struct MarqueeText: View {
@@ -311,6 +411,7 @@ struct MarqueeText: View {
 struct PopoverView: View {
     @ObservedObject var state: SpotifyState
     @ObservedObject var settings: AppSettings
+    @State private var accent: Color? = nil
 
     var body: some View {
         let t = state.track
@@ -325,16 +426,12 @@ struct PopoverView: View {
                 VStack(spacing: 8) {
                     HStack(alignment: .top, spacing: 12) {
                         if settings.showImage {
-                            AsyncImage(url: URL(string: t.artUrl)) { phase in
-                                switch phase {
-                                case .success(let img):
-                                    img.resizable().aspectRatio(contentMode: .fill)
-                                default:
-                                    Rectangle().fill(.quaternary)
-                                }
-                            }
-                            .frame(width: 96, height: 96)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            AlbumArtView(
+                                url: t.artUrl,
+                                isPlaying: t.isPlaying,
+                                vinyl: settings.vinylEnabled,
+                                size: 96
+                            )
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
@@ -368,6 +465,10 @@ struct PopoverView: View {
                                     SpotifyAPI.toggleShuffle(!t.shuffling)
                                     state.refresh()
                                 }
+                                ControlButton(system: "repeat", active: t.repeating) {
+                                    SpotifyAPI.toggleRepeat(!t.repeating)
+                                    state.refresh()
+                                }
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -383,7 +484,36 @@ struct PopoverView: View {
                 }
                 .padding(12)
                 .frame(width: 360)
+                .background(tintBackground)
+                .task(id: t.artUrl) { await loadAccent(for: t.artUrl) }
+                .onChange(of: settings.accentFromArt) { _, enabled in
+                    if enabled {
+                        Task { await loadAccent(for: t.artUrl) }
+                    } else {
+                        accent = nil
+                    }
+                }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var tintBackground: some View {
+        if settings.accentFromArt, let c = accent {
+            LinearGradient(
+                colors: [c.opacity(0.35), c.opacity(0.05)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        } else {
+            Color.clear
+        }
+    }
+
+    private func loadAccent(for url: String) async {
+        guard settings.accentFromArt, !url.isEmpty else { return }
+        if let c = await ImageColor.dominant(urlString: url) {
+            await MainActor.run { accent = c }
         }
     }
 }
@@ -581,6 +711,25 @@ struct ProgressSlider: View {
 
 // MARK: - Settings view
 
+struct GreenToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        let on = configuration.isOn
+        return RoundedRectangle(cornerRadius: 8)
+            .fill(on ? Color.green : Color.secondary.opacity(0.4))
+            .frame(width: 26, height: 15)
+            .overlay(
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.15), radius: 0.5, y: 0.5)
+                    .padding(1.5)
+                    .frame(width: 15, height: 15)
+                    .offset(x: on ? 5.5 : -5.5)
+            )
+            .animation(.easeInOut(duration: 0.15), value: on)
+            .onTapGesture { configuration.isOn.toggle() }
+    }
+}
+
 struct SettingsRow: View {
     let label: String
     @Binding var value: Bool
@@ -591,8 +740,7 @@ struct SettingsRow: View {
             Spacer()
             Toggle("", isOn: $value)
                 .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
+                .toggleStyle(GreenToggleStyle())
         }
     }
 }
@@ -611,6 +759,9 @@ struct SettingsView: View {
             SettingsRow(label: "Album", value: $settings.showAlbum)
             SettingsRow(label: "Volume slider", value: $settings.showVolume)
             SettingsRow(label: "Progress slider", value: $settings.showProgress)
+            Divider()
+            SettingsRow(label: "Vinyl animation", value: $settings.vinylEnabled)
+            SettingsRow(label: "Theme from album art", value: $settings.accentFromArt)
         }
         .font(.system(size: 11))
         .padding(12)
@@ -794,11 +945,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let x = buttonFrameInScreen.midX - size.width / 2
         let y = buttonFrameInScreen.minY - size.height - 6
         let targetFrame = NSRect(origin: NSPoint(x: x, y: y), size: size)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.1
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().setFrame(targetFrame, display: true)
-        }
+        panel.setFrame(targetFrame, display: true)
     }
 
     private func hidePanel() {
@@ -836,6 +983,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // MARK: - Entry point
+
+let myPid = ProcessInfo.processInfo.processIdentifier
+let running = NSRunningApplication.runningApplications(withBundleIdentifier: "com.canai.nowbar")
+    .filter { $0.processIdentifier != myPid && $0.processIdentifier > 0 }
+if !running.isEmpty {
+    exit(0)
+}
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
