@@ -42,6 +42,8 @@ final class AppSettings: ObservableObject {
     @Published var showProgress: Bool { didSet { save() } }
     @Published var vinylEnabled: Bool { didSet { save() } }
     @Published var accentFromArt: Bool { didSet { save() } }
+    @Published var toastEnabled: Bool { didSet { save() } }
+    @Published var toastPosition: String { didSet { save() } }
 
     init() {
         let d = UserDefaults.standard
@@ -53,6 +55,8 @@ final class AppSettings: ObservableObject {
         showProgress = d.object(forKey: "showProgress") as? Bool ?? true
         vinylEnabled = d.object(forKey: "vinylEnabled") as? Bool ?? false
         accentFromArt = d.object(forKey: "accentFromArt") as? Bool ?? false
+        toastEnabled = d.object(forKey: "toastEnabled") as? Bool ?? false
+        toastPosition = d.string(forKey: "toastPosition") ?? "bottomRight"
     }
 
     private func save() {
@@ -65,6 +69,35 @@ final class AppSettings: ObservableObject {
         d.set(showProgress, forKey: "showProgress")
         d.set(vinylEnabled, forKey: "vinylEnabled")
         d.set(accentFromArt, forKey: "accentFromArt")
+        d.set(toastEnabled, forKey: "toastEnabled")
+        d.set(toastPosition, forKey: "toastPosition")
+    }
+}
+
+// MARK: - Liked store
+
+final class LikedStore: ObservableObject {
+    @Published private(set) var keys: Set<String>
+
+    init() {
+        let arr = UserDefaults.standard.stringArray(forKey: "likedKeys") ?? []
+        keys = Set(arr)
+    }
+
+    func isLiked(_ t: SpotifyTrack) -> Bool {
+        !t.isOff && keys.contains(Self.key(t))
+    }
+
+    func toggle(_ t: SpotifyTrack) {
+        guard !t.isOff else { return }
+        let k = Self.key(t)
+        if keys.contains(k) { keys.remove(k) } else { keys.insert(k) }
+        UserDefaults.standard.set(Array(keys), forKey: "likedKeys")
+        SpotifyAPI.toggleLike()
+    }
+
+    private static func key(_ t: SpotifyTrack) -> String {
+        "\(t.name)—\(t.artist)"
     }
 }
 
@@ -130,6 +163,19 @@ enum SpotifyAPI {
         _ = run("tell application \"Spotify\" to set repeating to \(on ? "true" : "false")")
     }
 
+    static func toggleLike() {
+        let source = """
+        tell application "System Events"
+          if exists (process "Spotify") then
+            tell process "Spotify"
+              keystroke "b" using {option down, shift down}
+            end tell
+          end if
+        end tell
+        """
+        _ = run(source)
+    }
+
     static func seek(_ seconds: Double) {
         _ = run("tell application \"Spotify\" to set player position to \(seconds)")
     }
@@ -151,10 +197,16 @@ enum SpotifyAPI {
 
 final class SpotifyState: ObservableObject {
     @Published var track: SpotifyTrack = .off
+    var onTrackChange: ((SpotifyTrack) -> Void)?
+    private var lastKey: String = ""
 
     func refresh() {
         let next = SpotifyAPI.currentTrack()
+        let newKey = next.isOff ? "" : "\(next.name)—\(next.artist)"
+        let changed = !next.isOff && !lastKey.isEmpty && newKey != lastKey
         if next != track { track = next }
+        if changed { onTrackChange?(next) }
+        lastKey = newKey
     }
 
     func tickPosition() {
@@ -178,12 +230,13 @@ struct RootView: View {
     @ObservedObject var state: SpotifyState
     @ObservedObject var settings: AppSettings
     @ObservedObject var ui: UIState
+    @ObservedObject var liked: LikedStore
     let onQuit: () -> Void
 
     var body: some View {
         switch ui.mode {
         case .player:
-            PopoverView(state: state, settings: settings)
+            PopoverView(state: state, settings: settings, liked: liked)
         case .settings:
             SettingsView(settings: settings)
         case .contextMenu:
@@ -411,6 +464,7 @@ struct MarqueeText: View {
 struct PopoverView: View {
     @ObservedObject var state: SpotifyState
     @ObservedObject var settings: AppSettings
+    @ObservedObject var liked: LikedStore
     @State private var accent: Color? = nil
 
     var body: some View {
@@ -448,7 +502,7 @@ struct PopoverView: View {
                                     .padding(.bottom, 8)
                             }
 
-                            HStack(spacing: 6) {
+                            HStack(spacing: 5) {
                                 ControlButton(system: "backward.fill") {
                                     SpotifyAPI.perform("previous track")
                                     state.refresh()
@@ -468,6 +522,12 @@ struct PopoverView: View {
                                 ControlButton(system: "repeat", active: t.repeating) {
                                     SpotifyAPI.toggleRepeat(!t.repeating)
                                     state.refresh()
+                                }
+                                ControlButton(
+                                    system: liked.isLiked(t) ? "heart.fill" : "heart",
+                                    active: liked.isLiked(t)
+                                ) {
+                                    liked.toggle(t)
                                 }
                             }
                         }
@@ -527,11 +587,11 @@ struct ControlButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: system)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(active ? Color.green : Color.primary)
-                .frame(width: 32, height: 26)
+                .frame(width: 28, height: 24)
                 .background(
-                    RoundedRectangle(cornerRadius: 7)
+                    RoundedRectangle(cornerRadius: 6)
                         .fill(backgroundColor)
                 )
         }
@@ -762,10 +822,157 @@ struct SettingsView: View {
             Divider()
             SettingsRow(label: "Vinyl animation", value: $settings.vinylEnabled)
             SettingsRow(label: "Theme from album art", value: $settings.accentFromArt)
+            Divider()
+            SettingsRow(label: "Song-change toast", value: $settings.toastEnabled)
+            if settings.toastEnabled {
+                HStack {
+                    Text("Position")
+                    Spacer()
+                    Picker("", selection: $settings.toastPosition) {
+                        Text("Top left").tag("topLeft")
+                        Text("Top right").tag("topRight")
+                        Text("Bottom left").tag("bottomLeft")
+                        Text("Bottom right").tag("bottomRight")
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(width: 110)
+                }
+            }
         }
         .font(.system(size: 11))
         .padding(12)
         .frame(width: 220)
+    }
+}
+
+// MARK: - Toast
+
+struct ToastView: View {
+    let track: SpotifyTrack
+
+    var body: some View {
+        HStack(spacing: 10) {
+            AsyncImage(url: URL(string: track.artUrl)) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().aspectRatio(contentMode: .fill)
+                default:
+                    Rectangle().fill(.quaternary)
+                }
+            }
+            .frame(width: 42, height: 42)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Text(track.artist)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(width: 260)
+    }
+}
+
+final class ToastController {
+    private var panel: NSPanel?
+    private var hosting: NSHostingController<ToastView>?
+    private var hideWork: DispatchWorkItem?
+
+    func show(track: SpotifyTrack, position: String) {
+        build()
+        guard let panel, let hosting else { return }
+        hosting.rootView = ToastView(track: track)
+        hosting.view.layoutSubtreeIfNeeded()
+        let size = hosting.view.fittingSize
+        panel.setContentSize(size)
+
+        guard let screen = NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        let margin: CGFloat = 12
+        let origin: NSPoint
+        switch position {
+        case "topLeft":
+            origin = NSPoint(x: visible.minX + margin, y: visible.maxY - size.height - margin)
+        case "topRight":
+            origin = NSPoint(x: visible.maxX - size.width - margin, y: visible.maxY - size.height - margin)
+        case "bottomLeft":
+            origin = NSPoint(x: visible.minX + margin, y: visible.minY + margin)
+        default:
+            origin = NSPoint(x: visible.maxX - size.width - margin, y: visible.minY + margin)
+        }
+        panel.setFrameOrigin(origin)
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+
+        hideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.hide() }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+    }
+
+    private func hide() {
+        guard let panel else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak panel] in
+            panel?.orderOut(nil)
+        })
+    }
+
+    private func build() {
+        if panel != nil { return }
+        let h = NSHostingController(rootView: ToastView(track: .off))
+        h.sizingOptions = [.preferredContentSize]
+        let p = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 260, height: 62),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        p.isFloatingPanel = true
+        p.level = .statusBar
+        p.backgroundColor = .clear
+        p.isOpaque = false
+        p.hasShadow = true
+        p.ignoresMouseEvents = true
+
+        let container = NSView(frame: p.contentView!.bounds)
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 10
+        container.layer?.cornerCurve = .continuous
+        container.layer?.masksToBounds = true
+        container.layer?.borderWidth = 0.5
+        container.layer?.borderColor = NSColor.separatorColor.cgColor
+
+        let vibrant = NSVisualEffectView(frame: container.bounds)
+        vibrant.material = .menu
+        vibrant.blendingMode = .behindWindow
+        vibrant.state = .active
+        vibrant.autoresizingMask = [.width, .height]
+
+        h.view.frame = vibrant.bounds
+        h.view.autoresizingMask = [.width, .height]
+        vibrant.addSubview(h.view)
+        container.addSubview(vibrant)
+        p.contentView = container
+
+        panel = p
+        hosting = h
     }
 }
 
@@ -787,6 +994,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let state = SpotifyState()
     private let settings = AppSettings()
     private let ui = UIState()
+    private let liked = LikedStore()
+    private let toast = ToastController()
     private var refreshTimer: Timer?
     private var tickTimer: Timer?
     private var outsideClickMonitor: Any?
@@ -803,8 +1012,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state: state,
             settings: settings,
             ui: ui,
+            liked: liked,
             onQuit: { NSApp.terminate(nil) }
         ))
+
+        state.onTrackChange = { [weak self] track in
+            guard let self, self.settings.toastEnabled else { return }
+            self.toast.show(track: track, position: self.settings.toastPosition)
+        }
         hosting.sizingOptions = [.preferredContentSize]
 
         panel = NSPanel(
