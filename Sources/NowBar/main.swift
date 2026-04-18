@@ -50,9 +50,18 @@ final class AppSettings: ObservableObject {
     @Published var statsSkipCount: Bool { didSet { save() } }
     @Published var statsDailyMinutes: Bool { didSet { save() } }
     @Published var statsArtistPlays: Bool { didSet { save() } }
+    @Published var language: String { didSet { save() } }
 
     init() {
         let d = UserDefaults.standard
+        let sysLang = Locale.current.language.languageCode?.identifier ?? "en"
+        let defaultLang: String = {
+            switch sysLang {
+            case "es": return "es"
+            case "zh": return "zh"
+            default: return "en"
+            }
+        }()
         showImage = d.object(forKey: "showImage") as? Bool ?? true
         showTitle = d.object(forKey: "showTitle") as? Bool ?? true
         showArtist = d.object(forKey: "showArtist") as? Bool ?? true
@@ -69,6 +78,7 @@ final class AppSettings: ObservableObject {
         statsSkipCount = d.object(forKey: "statsSkipCount") as? Bool ?? true
         statsDailyMinutes = d.object(forKey: "statsDailyMinutes") as? Bool ?? true
         statsArtistPlays = d.object(forKey: "statsArtistPlays") as? Bool ?? true
+        language = d.string(forKey: "language") ?? defaultLang
     }
 
     private func save() {
@@ -89,8 +99,87 @@ final class AppSettings: ObservableObject {
         d.set(statsSkipCount, forKey: "statsSkipCount")
         d.set(statsDailyMinutes, forKey: "statsDailyMinutes")
         d.set(statsArtistPlays, forKey: "statsArtistPlays")
+        d.set(language, forKey: "language")
     }
 }
+
+// MARK: - Localization
+
+enum L10n {
+    static let table: [String: [String: String]] = [
+        "spotify_off": [
+            "en": "♪ Spotify off",
+            "es": "♪ Spotify apagado",
+            "zh": "♪ Spotify 已关闭"
+        ],
+        "now_playing": [
+            "en": "Now Playing…",
+            "es": "Reproduciendo…",
+            "zh": "正在播放…"
+        ],
+        "settings": ["en": "Settings", "es": "Ajustes", "zh": "设置"],
+        "album_image": ["en": "Album image", "es": "Portada del álbum", "zh": "专辑封面"],
+        "song_name": ["en": "Song name", "es": "Nombre de canción", "zh": "歌曲名"],
+        "artist": ["en": "Artist", "es": "Artista", "zh": "艺术家"],
+        "album": ["en": "Album", "es": "Álbum", "zh": "专辑"],
+        "volume_slider": ["en": "Volume slider", "es": "Control de volumen", "zh": "音量滑块"],
+        "progress_slider": ["en": "Progress slider", "es": "Barra de progreso", "zh": "进度滑块"],
+        "vinyl_animation": ["en": "Vinyl animation", "es": "Animación de vinilo", "zh": "黑胶动画"],
+        "theme_from_art": ["en": "Theme from album art", "es": "Tema desde portada", "zh": "从封面取主题"],
+        "toast_song_change": ["en": "Song-change toast", "es": "Aviso al cambiar canción", "zh": "切歌提示"],
+        "position": ["en": "Position", "es": "Posición", "zh": "位置"],
+        "top_left": ["en": "Top left", "es": "Arriba izquierda", "zh": "左上"],
+        "top_right": ["en": "Top right", "es": "Arriba derecha", "zh": "右上"],
+        "bottom_left": ["en": "Bottom left", "es": "Abajo izquierda", "zh": "左下"],
+        "bottom_right": ["en": "Bottom right", "es": "Abajo derecha", "zh": "右下"],
+        "stats": ["en": "Stats", "es": "Estadísticas", "zh": "统计"],
+        "view_stats": ["en": "View stats", "es": "Ver estadísticas", "zh": "查看统计"],
+        "enable_stats": ["en": "Enable stats", "es": "Activar estadísticas", "zh": "启用统计"],
+        "clear_stats": ["en": "Clear all stats", "es": "Borrar todas", "zh": "清除所有"],
+        "data_local": [
+            "en": "Data stored locally only",
+            "es": "Los datos se guardan solo localmente",
+            "zh": "数据仅存于本地"
+        ],
+        "enable_stats_q": [
+            "en": "Enable listening stats?",
+            "es": "¿Activar estadísticas de escucha?",
+            "zh": "启用听歌统计？"
+        ],
+        "stats_description": [
+            "en": "Track play counts, skips, minutes per day, and per-artist plays. Data stays on this Mac — nothing leaves the device.",
+            "es": "Registra reproducciones, saltos, minutos por día y reproducciones por artista. Los datos quedan en este Mac — nada sale del dispositivo.",
+            "zh": "记录播放次数、跳过、每日分钟数以及每位艺术家的播放数。数据仅留在本机 — 不发送到任何地方。"
+        ],
+        "enable": ["en": "Enable", "es": "Activar", "zh": "启用"],
+        "not_now": ["en": "Not now", "es": "Ahora no", "zh": "暂不"],
+        "play_count_song": ["en": "Play count per song", "es": "Reproducciones por canción", "zh": "每首播放次数"],
+        "skip_count_song": ["en": "Skip count per song", "es": "Saltos por canción", "zh": "每首跳过次数"],
+        "minutes_per_day": ["en": "Minutes per day", "es": "Minutos por día", "zh": "每日分钟"],
+        "plays_per_artist": ["en": "Plays per artist", "es": "Reproducciones por artista", "zh": "每位艺术家播放次数"],
+        "tracking": ["en": "Tracking", "es": "Registrando", "zh": "记录项"],
+        "your_stats": ["en": "Your Stats", "es": "Tus estadísticas", "zh": "你的统计"],
+        "no_data": [
+            "en": "No data yet. Keep listening — stats will appear here.",
+            "es": "Aún no hay datos. Sigue escuchando — las estadísticas aparecerán aquí.",
+            "zh": "暂无数据。继续听 — 统计会出现在这里。"
+        ],
+        "top_tracks": ["en": "Top tracks", "es": "Top canciones", "zh": "热门歌曲"],
+        "top_artists": ["en": "Top artists", "es": "Top artistas", "zh": "热门艺术家"],
+        "last_7_days": ["en": "Last 7 days", "es": "Últimos 7 días", "zh": "最近 7 天"],
+        "plays": ["en": "Plays", "es": "Reproducciones", "zh": "播放"],
+        "skips": ["en": "Skips", "es": "Saltos", "zh": "跳过"],
+        "minutes": ["en": "Minutes", "es": "Minutos", "zh": "分钟"],
+        "quit": ["en": "Quit NowBar", "es": "Cerrar NowBar", "zh": "退出 NowBar"],
+        "language": ["en": "Language", "es": "Idioma", "zh": "语言"]
+    ]
+
+    static func t(_ key: String, _ lang: String) -> String {
+        table[key]?[lang] ?? table[key]?["en"] ?? key
+    }
+}
+
+func tr(_ key: String, _ lang: String) -> String { L10n.t(key, lang) }
 
 // MARK: - Stats store
 
@@ -310,6 +399,7 @@ struct RootView: View {
             SettingsView(settings: settings, onOpenStats: { ui.mode = .stats })
         case .contextMenu:
             ContextMenuView(
+                lang: settings.language,
                 onSettings: { ui.mode = .settings },
                 onQuit: onQuit
             )
@@ -323,6 +413,7 @@ struct RootView: View {
         case .statsData:
             StatsDashboardView(
                 stats: stats,
+                settings: settings,
                 onBack: { ui.mode = .stats }
             )
         }
@@ -332,17 +423,18 @@ struct RootView: View {
 // MARK: - Context menu view
 
 struct ContextMenuView: View {
+    let lang: String
     let onSettings: () -> Void
     let onQuit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            MenuRow(icon: "gearshape", label: "Settings", action: onSettings)
+            MenuRow(icon: "gearshape", label: tr("settings", lang), action: onSettings)
             Divider().padding(.vertical, 2)
-            MenuRow(icon: "power", label: "Quit NowBar", action: onQuit)
+            MenuRow(icon: "power", label: tr("quit", lang), action: onQuit)
         }
         .padding(6)
-        .frame(width: 170)
+        .frame(width: 180)
     }
 }
 
@@ -552,7 +644,7 @@ struct PopoverView: View {
         Group {
             if t.isOff {
                 VStack {
-                    Text("♪ Spotify off")
+                    Text(tr("spotify_off", settings.language))
                         .foregroundStyle(.secondary)
                 }
                 .frame(width: 320, height: 120)
@@ -884,42 +976,56 @@ struct SettingsView: View {
     let onOpenStats: () -> Void
 
     var body: some View {
+        let lang = settings.language
         VStack(alignment: .leading, spacing: 10) {
-            Text("Settings")
+            Text(tr("settings", lang))
                 .font(.system(size: 13, weight: .semibold))
             Divider()
-            SettingsRow(label: "Album image", value: $settings.showImage)
-            SettingsRow(label: "Song name", value: $settings.showTitle)
-            SettingsRow(label: "Artist", value: $settings.showArtist)
-            SettingsRow(label: "Album", value: $settings.showAlbum)
-            SettingsRow(label: "Volume slider", value: $settings.showVolume)
-            SettingsRow(label: "Progress slider", value: $settings.showProgress)
+            SettingsRow(label: tr("album_image", lang), value: $settings.showImage)
+            SettingsRow(label: tr("song_name", lang), value: $settings.showTitle)
+            SettingsRow(label: tr("artist", lang), value: $settings.showArtist)
+            SettingsRow(label: tr("album", lang), value: $settings.showAlbum)
+            SettingsRow(label: tr("volume_slider", lang), value: $settings.showVolume)
+            SettingsRow(label: tr("progress_slider", lang), value: $settings.showProgress)
             Divider()
-            SettingsRow(label: "Vinyl animation", value: $settings.vinylEnabled)
-            SettingsRow(label: "Theme from album art", value: $settings.accentFromArt)
+            SettingsRow(label: tr("vinyl_animation", lang), value: $settings.vinylEnabled)
+            SettingsRow(label: tr("theme_from_art", lang), value: $settings.accentFromArt)
             Divider()
-            SettingsRow(label: "Song-change toast", value: $settings.toastEnabled)
+            SettingsRow(label: tr("toast_song_change", lang), value: $settings.toastEnabled)
             if settings.toastEnabled {
                 HStack {
-                    Text("Position")
+                    Text(tr("position", lang))
                     Spacer()
                     Picker("", selection: $settings.toastPosition) {
-                        Text("Top left").tag("topLeft")
-                        Text("Top right").tag("topRight")
-                        Text("Bottom left").tag("bottomLeft")
-                        Text("Bottom right").tag("bottomRight")
+                        Text(tr("top_left", lang)).tag("topLeft")
+                        Text(tr("top_right", lang)).tag("topRight")
+                        Text(tr("bottom_left", lang)).tag("bottomLeft")
+                        Text(tr("bottom_right", lang)).tag("bottomRight")
                     }
                     .labelsHidden()
                     .controlSize(.small)
-                    .frame(width: 110)
+                    .frame(width: 130)
                 }
             }
             Divider()
-            NavRow(label: "Stats", action: onOpenStats)
+            HStack {
+                Text(tr("language", lang))
+                Spacer()
+                Picker("", selection: $settings.language) {
+                    Text("English").tag("en")
+                    Text("Español").tag("es")
+                    Text("中文").tag("zh")
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 110)
+            }
+            Divider()
+            NavRow(label: tr("stats", lang), action: onOpenStats)
         }
         .font(.system(size: 11))
         .padding(12)
-        .frame(width: 220)
+        .frame(width: 240)
     }
 }
 
@@ -957,6 +1063,7 @@ struct StatsView: View {
     let onView: () -> Void
 
     var body: some View {
+        let lang = settings.language
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Button(action: onBack) {
@@ -964,33 +1071,33 @@ struct StatsView: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                Text("Stats")
+                Text(tr("stats", lang))
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
             }
             Divider()
 
             if !settings.statsAsked {
-                firstTimePrompt
+                firstTimePrompt(lang: lang)
             } else {
-                SettingsRow(label: "Enable stats", value: $settings.statsEnabled)
+                SettingsRow(label: tr("enable_stats", lang), value: $settings.statsEnabled)
                 if settings.statsEnabled {
                     Divider()
-                    Text("Tracking")
+                    Text(tr("tracking", lang))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    SettingsRow(label: "Play count per song", value: $settings.statsPlayCount)
-                    SettingsRow(label: "Skip count per song", value: $settings.statsSkipCount)
-                    SettingsRow(label: "Minutes per day", value: $settings.statsDailyMinutes)
-                    SettingsRow(label: "Plays per artist", value: $settings.statsArtistPlays)
+                    SettingsRow(label: tr("play_count_song", lang), value: $settings.statsPlayCount)
+                    SettingsRow(label: tr("skip_count_song", lang), value: $settings.statsSkipCount)
+                    SettingsRow(label: tr("minutes_per_day", lang), value: $settings.statsDailyMinutes)
+                    SettingsRow(label: tr("plays_per_artist", lang), value: $settings.statsArtistPlays)
                     Divider()
-                    NavRow(label: "View stats", action: onView)
+                    NavRow(label: tr("view_stats", lang), action: onView)
                     Divider()
-                    Text("Data stored locally only")
+                    Text(tr("data_local", lang))
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
                     Button(action: { stats.reset() }) {
-                        Text("Clear all stats")
+                        Text(tr("clear_stats", lang))
                             .font(.system(size: 10))
                             .foregroundStyle(.red)
                     }
@@ -1000,14 +1107,14 @@ struct StatsView: View {
         }
         .font(.system(size: 11))
         .padding(12)
-        .frame(width: 240)
+        .frame(width: 260)
     }
 
-    private var firstTimePrompt: some View {
+    private func firstTimePrompt(lang: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Enable listening stats?")
+            Text(tr("enable_stats_q", lang))
                 .font(.system(size: 12, weight: .semibold))
-            Text("Track play counts, skips, minutes per day, and per-artist plays. Data stays on this Mac — nothing leaves the device.")
+            Text(tr("stats_description", lang))
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1016,7 +1123,7 @@ struct StatsView: View {
                     settings.statsEnabled = true
                     settings.statsAsked = true
                 }) {
-                    Text("Enable")
+                    Text(tr("enable", lang))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
@@ -1028,7 +1135,7 @@ struct StatsView: View {
                     settings.statsEnabled = false
                     settings.statsAsked = true
                 }) {
-                    Text("Not now")
+                    Text(tr("not_now", lang))
                         .font(.system(size: 11))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 5)
@@ -1045,6 +1152,7 @@ struct StatsView: View {
 
 struct ToastView: View {
     let track: SpotifyTrack
+    let lang: String
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1060,7 +1168,7 @@ struct ToastView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             VStack(alignment: .leading, spacing: 1) {
-                Text("Now Playing…")
+                Text(tr("now_playing", lang))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.tertiary)
                     .textCase(.uppercase)
@@ -1085,10 +1193,10 @@ final class ToastController {
     private var hosting: NSHostingController<ToastView>?
     private var hideWork: DispatchWorkItem?
 
-    func show(track: SpotifyTrack, position: String) {
-        build()
+    func show(track: SpotifyTrack, position: String, lang: String) {
+        build(lang: lang)
         guard let panel, let hosting else { return }
-        hosting.rootView = ToastView(track: track)
+        hosting.rootView = ToastView(track: track, lang: lang)
         hosting.view.layoutSubtreeIfNeeded()
         let size = hosting.view.fittingSize
         panel.setContentSize(size)
@@ -1134,9 +1242,9 @@ final class ToastController {
         })
     }
 
-    private func build() {
+    private func build(lang: String) {
         if panel != nil { return }
-        let h = NSHostingController(rootView: ToastView(track: .off))
+        let h = NSHostingController(rootView: ToastView(track: .off, lang: lang))
         h.sizingOptions = [.preferredContentSize]
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 260, height: 62),
@@ -1180,9 +1288,11 @@ final class ToastController {
 
 struct StatsDashboardView: View {
     @ObservedObject var stats: StatsStore
+    @ObservedObject var settings: AppSettings
     let onBack: () -> Void
 
     var body: some View {
+        let lang = settings.language
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Button(action: onBack) {
@@ -1190,37 +1300,38 @@ struct StatsDashboardView: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                Text("Your Stats")
+                Text(tr("your_stats", lang))
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
             }
             Divider()
 
             if isEmpty {
-                Text("No data yet. Keep listening — stats will appear here.")
+                Text(tr("no_data", lang))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 20)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                summary
+                summary(lang: lang)
                 Divider()
                 if !topTracks.isEmpty {
-                    sectionTitle("Top tracks")
+                    sectionTitle(tr("top_tracks", lang))
                     ForEach(Array(topTracks.enumerated()), id: \.offset) { idx, item in
                         rankRow(rank: idx + 1, title: item.0, value: "\(item.1)")
                     }
                     Divider()
                 }
                 if !topArtists.isEmpty {
-                    sectionTitle("Top artists")
+                    sectionTitle(tr("top_artists", lang))
                     ForEach(Array(topArtists.enumerated()), id: \.offset) { idx, item in
                         rankRow(rank: idx + 1, title: item.0, value: "\(item.1)")
                     }
                     Divider()
                 }
                 if !last7.isEmpty {
-                    sectionTitle("Last 7 days")
+                    sectionTitle(tr("last_7_days", lang))
                     dailyChart
                 }
             }
@@ -1237,11 +1348,11 @@ struct StatsDashboardView: View {
         stats.data.dailyMinutes.isEmpty
     }
 
-    private var summary: some View {
+    private func summary(lang: String) -> some View {
         HStack(spacing: 12) {
-            statCard(label: "Plays", value: "\(stats.data.plays.values.reduce(0,+))")
-            statCard(label: "Skips", value: "\(stats.data.skips.values.reduce(0,+))")
-            statCard(label: "Minutes", value: String(format: "%.0f", stats.data.dailyMinutes.values.reduce(0,+)))
+            statCard(label: tr("plays", lang), value: "\(stats.data.plays.values.reduce(0,+))")
+            statCard(label: tr("skips", lang), value: "\(stats.data.skips.values.reduce(0,+))")
+            statCard(label: tr("minutes", lang), value: String(format: "%.0f", stats.data.dailyMinutes.values.reduce(0,+)))
         }
     }
 
@@ -1379,7 +1490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.stats.trackChanged(to: track)
             if self.settings.toastEnabled {
-                self.toast.show(track: track, position: self.settings.toastPosition)
+                self.toast.show(track: track, position: self.settings.toastPosition, lang: self.settings.language)
             }
         }
         hosting.sizingOptions = [.preferredContentSize]
