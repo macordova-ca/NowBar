@@ -4,9 +4,7 @@ App nativa para la barra de menú de macOS. Construida con Swift + SwiftUI + App
 
 ## Descarga
 
-La forma más simple de instalar NowBar es descargar el `.dmg` desde la página de releases:
-
-1. Ve a **[Releases](https://github.com/macordova-ca/NowBar/releases/latest)** y descarga `NowBar-<versión>.dmg`
+1. **[Descargar NowBar.dmg](https://github.com/macordova-ca/NowBar/releases/latest/download/NowBar.dmg)** (última versión)
 2. Abre el `.dmg` y arrastra **NowBar.app** a la carpeta **Applications**
 3. Abre NowBar desde Launchpad o Finder. La primera vez macOS puede bloquear la app porque la firma es ad-hoc:
    - Click derecho sobre **NowBar.app** → **Abrir** → confirma en el diálogo

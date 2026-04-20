@@ -38,7 +38,7 @@ jobs:
       - name: Build DMG
         run: |
           VERSION="${GITHUB_REF_NAME:-dev}"
-          DMG="NowBar-${VERSION}.dmg"
+          DMG="NowBar.dmg"
           rm -f "$DMG"
           create-dmg \
             --volname "NowBar ${VERSION}" \
