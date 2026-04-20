@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build release binary
+        run: swift build -c release
+
+      - name: Package .app bundle
+        run: |
+          APP="NowBar.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp .build/release/NowBar "$APP/Contents/MacOS/NowBar"
+          cp Info.plist "$APP/Contents/Info.plist"
+          cp nowbar-icon.icns "$APP/Contents/Resources/nowbar-icon.icns"
+          codesign --force --deep --sign - "$APP"
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          DMG="NowBar-${VERSION}.dmg"
+          rm -f "$DMG"
+          create-dmg \
+            --volname "NowBar ${VERSION}" \
+            --volicon "nowbar-icon.icns" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 110 \
+            --icon "NowBar.app" 160 190 \
+            --hide-extension "NowBar.app" \
+            --app-drop-link 440 190 \
+            "$DMG" \
+            "NowBar.app"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NowBar-dmg
+          path: ${{ env.DMG }}
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.DMG }}
+          generate_release_notes: true
+          body: |
+            ## Instalación
+
+            1. Descarga el `.dmg` de abajo
+            2. Ábrelo y arrastra **NowBar** a la carpeta **Applications**
+            3. Al primer launch macOS puede bloquear la app. Click derecho → **Abrir** → confirma
+            4. El wizard de NowBar te guía para habilitar los navegadores que uses
+
+            Ver [README](../blob/main/README.md) para detalles.

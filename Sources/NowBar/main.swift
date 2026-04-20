@@ -3,14 +3,19 @@ import SwiftUI
 import Combine
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import CoreAudio
+import Darwin
 
 // MARK: - Model
+
+enum MediaKind: String, Equatable { case spotify, music, other }
 
 struct SpotifyTrack: Equatable {
     var name: String
     var artist: String
     var album: String
     var artUrl: String
+    var artworkData: Data?
     var isPlaying: Bool
     var shuffling: Bool
     var repeating: Bool
@@ -18,8 +23,26 @@ struct SpotifyTrack: Equatable {
     var position: Double
     var duration: Double
     var isOff: Bool
+    var kind: MediaKind
+    var appName: String
+    var bundleID: String
 
-    static let off = SpotifyTrack(name: "", artist: "", album: "", artUrl: "", isPlaying: false, shuffling: false, repeating: false, volume: 50, position: 0, duration: 0, isOff: true)
+    static let off = SpotifyTrack(
+        name: "", artist: "", album: "", artUrl: "", artworkData: nil,
+        isPlaying: false, shuffling: false, repeating: false,
+        volume: 50, position: 0, duration: 0, isOff: true,
+        kind: .spotify, appName: "Spotify", bundleID: "com.spotify.client"
+    )
+
+    static let musicOff = SpotifyTrack(
+        name: "", artist: "", album: "", artUrl: "", artworkData: nil,
+        isPlaying: false, shuffling: false, repeating: false,
+        volume: 50, position: 0, duration: 0, isOff: true,
+        kind: .music, appName: "Music", bundleID: "com.apple.Music"
+    )
+
+    var isSpotify: Bool { kind == .spotify }
+    var isMusic: Bool { kind == .music }
 
     var barTitle: String {
         if isOff { return "♪ —" }
@@ -51,6 +74,8 @@ final class AppSettings: ObservableObject {
     @Published var statsDailyMinutes: Bool { didSet { save() } }
     @Published var statsArtistPlays: Bool { didSet { save() } }
     @Published var language: String { didSet { save() } }
+    @Published var preferredSourceBundleID: String { didSet { save() } }
+    @Published var onboardingCompleted: Bool { didSet { save() } }
 
     init() {
         let d = UserDefaults.standard
@@ -79,6 +104,8 @@ final class AppSettings: ObservableObject {
         statsDailyMinutes = d.object(forKey: "statsDailyMinutes") as? Bool ?? true
         statsArtistPlays = d.object(forKey: "statsArtistPlays") as? Bool ?? true
         language = d.string(forKey: "language") ?? defaultLang
+        preferredSourceBundleID = d.string(forKey: "preferredSourceBundleID") ?? ""
+        onboardingCompleted = d.object(forKey: "onboardingCompleted") as? Bool ?? false
     }
 
     private func save() {
@@ -100,6 +127,8 @@ final class AppSettings: ObservableObject {
         d.set(statsDailyMinutes, forKey: "statsDailyMinutes")
         d.set(statsArtistPlays, forKey: "statsArtistPlays")
         d.set(language, forKey: "language")
+        d.set(preferredSourceBundleID, forKey: "preferredSourceBundleID")
+        d.set(onboardingCompleted, forKey: "onboardingCompleted")
     }
 }
 
@@ -111,6 +140,91 @@ enum L10n {
             "en": "♪ Spotify off",
             "es": "♪ Spotify apagado",
             "zh": "♪ Spotify 已关闭"
+        ],
+        "open_music": [
+            "en": "Open Apple Music",
+            "es": "Abrir Apple Music",
+            "zh": "打开 Apple Music"
+        ],
+        "setup_title": [
+            "en": "Welcome to NowBar",
+            "es": "Bienvenido a NowBar",
+            "zh": "欢迎使用 NowBar"
+        ],
+        "setup_subtitle": [
+            "en": "To control audio in browsers, enable \"Allow JavaScript from Apple Events\" once per browser.",
+            "es": "Para controlar audio en navegadores, activa \"Permitir JavaScript de Apple Events\" una vez por navegador.",
+            "zh": "要控制浏览器中的音频,每个浏览器只需启用一次“允许 Apple 事件的 JavaScript”。"
+        ],
+        "setup_instruction_chromium": [
+            "en": "Menu → View → Developer → Allow JavaScript from Apple Events",
+            "es": "Menú → Ver → Desarrollador → Permitir JavaScript de eventos de Apple",
+            "zh": "菜单 → 查看 → 开发者 → 允许来自 Apple 事件的 JavaScript"
+        ],
+        "setup_instruction_safari": [
+            "en": "Settings → Advanced → Show Develop menu, then Develop → Allow JavaScript from Apple Events",
+            "es": "Ajustes → Avanzado → Mostrar menú Desarrollar, luego Desarrollar → Permitir JavaScript de Apple Events",
+            "zh": "设置 → 高级 → 显示开发菜单,然后 开发 → 允许来自 Apple 事件的 JavaScript"
+        ],
+        "setup_open_browser": [
+            "en": "Open",
+            "es": "Abrir",
+            "zh": "打开"
+        ],
+        "setup_status_configured": [
+            "en": "Configured",
+            "es": "Configurado",
+            "zh": "已配置"
+        ],
+        "setup_status_unconfigured": [
+            "en": "Needs setup",
+            "es": "Requiere configuración",
+            "zh": "需要设置"
+        ],
+        "setup_status_not_running": [
+            "en": "Not running",
+            "es": "No abierto",
+            "zh": "未运行"
+        ],
+        "setup_status_not_installed": [
+            "en": "Not installed",
+            "es": "No instalado",
+            "zh": "未安装"
+        ],
+        "setup_recheck": [
+            "en": "Re-check",
+            "es": "Verificar de nuevo",
+            "zh": "重新检查"
+        ],
+        "setup_done": [
+            "en": "Done",
+            "es": "Listo",
+            "zh": "完成"
+        ],
+        "setup_skip": [
+            "en": "Skip",
+            "es": "Omitir",
+            "zh": "跳过"
+        ],
+        "setup_banner_title": [
+            "en": "Set up browsers",
+            "es": "Configurar navegadores",
+            "zh": "设置浏览器"
+        ],
+        "setup_banner_subtitle": [
+            "en": "Enable JavaScript from Apple Events",
+            "es": "Habilita JavaScript de Apple Events",
+            "zh": "启用来自 Apple 事件的 JavaScript"
+        ],
+        "nothing_playing": [
+            "en": "Nothing is playing",
+            "es": "No hay música reproduciéndose",
+            "zh": "没有正在播放的音乐"
+        ],
+        "open_spotify": [
+            "en": "Open Spotify",
+            "es": "Abrir Spotify",
+            "zh": "打开 Spotify"
         ],
         "now_playing": [
             "en": "Now Playing…",
@@ -132,9 +246,9 @@ enum L10n {
         "top_right": ["en": "Top right", "es": "Arriba derecha", "zh": "右上"],
         "bottom_left": ["en": "Bottom left", "es": "Abajo izquierda", "zh": "左下"],
         "bottom_right": ["en": "Bottom right", "es": "Abajo derecha", "zh": "右下"],
-        "stats": ["en": "Stats", "es": "Estadísticas", "zh": "统计"],
-        "view_stats": ["en": "View stats", "es": "Ver estadísticas", "zh": "查看统计"],
-        "enable_stats": ["en": "Enable stats", "es": "Activar estadísticas", "zh": "启用统计"],
+        "stats": ["en": "Spotify Stats", "es": "Estadísticas de Spotify", "zh": "Spotify 统计"],
+        "view_stats": ["en": "View Spotify stats", "es": "Ver estadísticas de Spotify", "zh": "查看 Spotify 统计"],
+        "enable_stats": ["en": "Enable Spotify stats", "es": "Activar estadísticas de Spotify", "zh": "启用 Spotify 统计"],
         "clear_stats": ["en": "Clear all stats", "es": "Borrar todas", "zh": "清除所有"],
         "data_local": [
             "en": "Data stored locally only",
@@ -142,14 +256,14 @@ enum L10n {
             "zh": "数据仅存于本地"
         ],
         "enable_stats_q": [
-            "en": "Enable listening stats?",
-            "es": "¿Activar estadísticas de escucha?",
-            "zh": "启用听歌统计？"
+            "en": "Enable Spotify stats?",
+            "es": "¿Activar estadísticas de Spotify?",
+            "zh": "启用 Spotify 统计？"
         ],
         "stats_description": [
-            "en": "Track play counts, skips, minutes per day, and per-artist plays. Data stays on this Mac — nothing leaves the device.",
-            "es": "Registra reproducciones, saltos, minutos por día y reproducciones por artista. Los datos quedan en este Mac — nada sale del dispositivo.",
-            "zh": "记录播放次数、跳过、每日分钟数以及每位艺术家的播放数。数据仅留在本机 — 不发送到任何地方。"
+            "en": "Track Spotify play counts, skips, minutes per day, and per-artist plays. Data stays on this Mac — nothing leaves the device.",
+            "es": "Registra reproducciones, saltos, minutos por día y reproducciones por artista de Spotify. Los datos quedan en este Mac — nada sale del dispositivo.",
+            "zh": "记录 Spotify 播放次数、跳过、每日分钟数和每位艺术家的播放数。数据仅留在本机 — 不发送到任何地方。"
         ],
         "enable": ["en": "Enable", "es": "Activar", "zh": "启用"],
         "not_now": ["en": "Not now", "es": "Ahora no", "zh": "暂不"],
@@ -158,7 +272,7 @@ enum L10n {
         "minutes_per_day": ["en": "Minutes per day", "es": "Minutos por día", "zh": "每日分钟"],
         "plays_per_artist": ["en": "Plays per artist", "es": "Reproducciones por artista", "zh": "每位艺术家播放次数"],
         "tracking": ["en": "Tracking", "es": "Registrando", "zh": "记录项"],
-        "your_stats": ["en": "Your Stats", "es": "Tus estadísticas", "zh": "你的统计"],
+        "your_stats": ["en": "Your Spotify Stats", "es": "Tus estadísticas de Spotify", "zh": "你的 Spotify 统计"],
         "no_data": [
             "en": "No data yet. Keep listening — stats will appear here.",
             "es": "Aún no hay datos. Sigue escuchando — las estadísticas aparecerán aquí.",
@@ -171,6 +285,7 @@ enum L10n {
         "skips": ["en": "Skips", "es": "Saltos", "zh": "跳过"],
         "minutes": ["en": "Minutes", "es": "Minutos", "zh": "分钟"],
         "quit": ["en": "Quit NowBar", "es": "Cerrar NowBar", "zh": "退出 NowBar"],
+        "setup_browsers_menu": ["en": "Set up browsers", "es": "Configurar navegadores", "zh": "设置浏览器"],
         "language": ["en": "Language", "es": "Idioma", "zh": "语言"]
     ]
 
@@ -200,7 +315,7 @@ final class StatsStore: ObservableObject {
     init() { load() }
 
     func tick(_ t: SpotifyTrack) {
-        guard let s = settings, s.statsEnabled, !t.isOff, t.isPlaying else { return }
+        guard let s = settings, s.statsEnabled, !t.isOff, t.isPlaying, t.isSpotify else { return }
         let key = Self.trackKey(t)
         if key != currentKey {
             commit()
@@ -217,6 +332,7 @@ final class StatsStore: ObservableObject {
     }
 
     func trackChanged(to t: SpotifyTrack) {
+        guard t.isOff || t.isSpotify else { return }
         commit()
         currentKey = t.isOff ? "" : Self.trackKey(t)
         currentArtist = t.artist
@@ -307,13 +423,17 @@ enum SpotifyAPI {
             artist: parts[1],
             album: parts[2],
             artUrl: parts[3],
+            artworkData: nil,
             isPlaying: parts[4] == "playing",
             shuffling: parts[5] == "true",
             repeating: parts[6] == "true",
             volume: Int(parts[7]) ?? 50,
             position: parseNumber(parts[8]),
             duration: parseNumber(parts[9]),
-            isOff: false
+            isOff: false,
+            kind: .spotify,
+            appName: "Spotify",
+            bundleID: "com.spotify.client"
         )
     }
 
@@ -351,20 +471,1002 @@ static func seek(_ seconds: Double) {
     }
 }
 
+// MARK: - Apple Music AppleScript bridge
+
+enum MusicAPI {
+    static func currentTrack() -> SpotifyTrack {
+        let script = """
+        tell application "Music"
+          if it is running then
+            try
+              if player state is stopped then return "off"
+              set t to name of current track
+              set a to artist of current track
+              set al to album of current track
+              set s to player state as string
+              set sh to (shuffle enabled) as string
+              set rp to (song repeat as string)
+              set v to sound volume as string
+              set p to (player position) as string
+              set d to (duration of current track) as string
+              return t & "§" & a & "§" & al & "§" & s & "§" & sh & "§" & rp & "§" & v & "§" & p & "§" & d
+            on error
+              return "off"
+            end try
+          else
+            return "off"
+          end if
+        end tell
+        """
+        guard let raw = run(script), raw != "off" else { return .musicOff }
+        let parts = raw.components(separatedBy: "§")
+        guard parts.count == 9 else { return .musicOff }
+        return SpotifyTrack(
+            name: parts[0],
+            artist: parts[1],
+            album: parts[2],
+            artUrl: "",
+            artworkData: nil,
+            isPlaying: parts[3] == "playing",
+            shuffling: parts[4] == "true",
+            repeating: parts[5] != "off",
+            volume: Int(parts[6]) ?? 50,
+            position: parseNumber(parts[7]),
+            duration: parseNumber(parts[8]),
+            isOff: false,
+            kind: .music,
+            appName: "Music",
+            bundleID: "com.apple.Music"
+        )
+    }
+
+    private static func parseNumber(_ s: String) -> Double {
+        let normalized = s.replacingOccurrences(of: ",", with: ".")
+        return Double(normalized) ?? 0
+    }
+
+    static func setVolume(_ value: Int) {
+        _ = run("tell application \"Music\" to set sound volume to \(value)")
+    }
+
+    static func toggleShuffle(_ on: Bool) {
+        _ = run("tell application \"Music\" to set shuffle enabled to \(on ? "true" : "false")")
+    }
+
+    static func toggleRepeat(_ on: Bool) {
+        let value = on ? "all" : "off"
+        _ = run("tell application \"Music\" to set song repeat to \(value)")
+    }
+
+    static func seek(_ seconds: Double) {
+        _ = run("tell application \"Music\" to set player position to \(seconds)")
+    }
+
+    static func perform(_ action: String) {
+        _ = run("tell application \"Music\" to \(action)")
+    }
+
+    static func reveal() {
+        _ = run("""
+        tell application "Music"
+          activate
+          try
+            reveal current track
+          end try
+        end tell
+        """)
+    }
+
+    @discardableResult
+    private static func run(_ source: String) -> String? {
+        var error: NSDictionary?
+        guard let script = NSAppleScript(source: source) else { return nil }
+        let result = script.executeAndReturnError(&error)
+        return result.stringValue
+    }
+}
+
+// MARK: - Browser setup detection
+
+enum BrowserSetup {
+    enum Status: Equatable { case configured, unconfigured, notRunning, notInstalled }
+
+    static func status(for entry: (bundleID: String, appName: String, dialect: BrowserJS.Dialect)) -> Status {
+        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: entry.bundleID) != nil else {
+            return .notInstalled
+        }
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: entry.bundleID).first != nil else {
+            return .notRunning
+        }
+        let probe: String
+        switch entry.dialect {
+        case .chromium:
+            probe = """
+            tell application "\(entry.appName)"
+                try
+                    repeat with w in windows
+                        try
+                            set t to active tab of w
+                            set r to (execute t javascript "'nb_ok'")
+                            if r is "nb_ok" then return "ok"
+                        end try
+                    end repeat
+                end try
+                return "nok"
+            end tell
+            """
+        case .safari:
+            probe = """
+            tell application "Safari"
+                try
+                    repeat with w in windows
+                        try
+                            set t to current tab of w
+                            set r to (do JavaScript "'nb_ok'" in t)
+                            if r is "nb_ok" then return "ok"
+                        end try
+                    end repeat
+                end try
+                return "nok"
+            end tell
+            """
+        }
+        return runProbe(probe) == "ok" ? .configured : .unconfigured
+    }
+
+    static func allStatuses() -> [(entry: (bundleID: String, appName: String, dialect: BrowserJS.Dialect), status: Status)] {
+        BrowserJS.supported.map { entry in (entry, status(for: entry)) }
+    }
+
+    static func anyUnconfiguredRunning() -> Bool {
+        allStatuses().contains { $0.status == .unconfigured }
+    }
+
+    static func activate(_ entry: (bundleID: String, appName: String, dialect: BrowserJS.Dialect)) {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: entry.bundleID) {
+            let cfg = NSWorkspace.OpenConfiguration()
+            cfg.activates = true
+            NSWorkspace.shared.openApplication(at: url, configuration: cfg, completionHandler: nil)
+        }
+    }
+
+    private static func runProbe(_ source: String, timeout: TimeInterval = 2.0) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", source]
+        let out = Pipe()
+        let err = Pipe()
+        proc.standardOutput = out
+        proc.standardError = err
+        do { try proc.run() } catch { return nil }
+        let deadline = Date().addingTimeInterval(timeout)
+        while proc.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        if proc.isRunning {
+            proc.terminate()
+            Thread.sleep(forTimeInterval: 0.1)
+            if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+            return nil
+        }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - iTunes Search artwork lookup
+
+enum MusicArtwork {
+    private static var cache: [String: String] = [:]
+    private static let queue = DispatchQueue(label: "NowBar.MusicArtwork", attributes: .concurrent)
+
+    static func cached(artist: String, name: String) -> String? {
+        queue.sync { cache[key(artist, name)] }
+    }
+
+    static func lookup(artist: String, name: String, completion: @escaping (String?) -> Void) {
+        let k = key(artist, name)
+        if let hit = queue.sync(execute: { cache[k] }) {
+            DispatchQueue.main.async { completion(hit) }
+            return
+        }
+        let term = "\(artist) \(name)"
+        guard let q = term.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://itunes.apple.com/search?term=\(q)&entity=musicTrack&limit=1")
+        else { completion(nil); return }
+        URLSession.shared.dataTask(with: url) { data, _, _ in
+            var result: String? = nil
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let results = json["results"] as? [[String: Any]],
+               let first = results.first,
+               let u100 = first["artworkUrl100"] as? String {
+                result = u100.replacingOccurrences(of: "100x100bb", with: "600x600bb")
+            }
+            if let result {
+                queue.async(flags: .barrier) { cache[k] = result }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }.resume()
+    }
+
+    private static func key(_ artist: String, _ name: String) -> String { "\(artist)|\(name)" }
+}
+
+// MARK: - Browser JS (Chromium AppleScript)
+
+enum BrowserJS {
+    enum Dialect { case chromium, safari }
+
+    static let supported: [(bundleID: String, appName: String, dialect: Dialect)] = [
+        ("com.brave.Browser", "Brave Browser", .chromium),
+        ("com.google.Chrome", "Google Chrome", .chromium),
+        ("com.microsoft.edgemac", "Microsoft Edge", .chromium),
+        ("company.thebrowser.Browser", "Arc", .chromium),
+        ("com.operasoftware.Opera", "Opera", .chromium),
+        ("com.vivaldi.Vivaldi", "Vivaldi", .chromium),
+        ("com.apple.Safari", "Safari", .safari)
+    ]
+
+    static func autoEnableJavaScriptFromAppleEvents() {
+        let cfg: [(bundle: String, keys: [(String, String)])] = [
+            ("com.brave.Browser", [("AllowJavaScriptFromAppleEvents", "-bool"), ("DeveloperToolsAvailability", "-int")]),
+            ("com.google.Chrome", [("AllowJavaScriptFromAppleEvents", "-bool")]),
+            ("com.microsoft.edgemac", [("AllowJavaScriptFromAppleEvents", "-bool")]),
+            ("company.thebrowser.Browser", [("AllowJavaScriptFromAppleEvents", "-bool")]),
+            ("com.operasoftware.Opera", [("AllowJavaScriptFromAppleEvents", "-bool")]),
+            ("com.vivaldi.Vivaldi", [("AllowJavaScriptFromAppleEvents", "-bool")]),
+            ("com.apple.Safari", [
+                ("IncludeDevelopMenu", "-bool"),
+                ("WebKitDeveloperExtras", "-bool"),
+                ("WebKitPreferences.developerExtrasEnabled", "-bool"),
+                ("AllowJavaScriptFromAppleEvents", "-bool")
+            ])
+        ]
+        for entry in cfg {
+            for (key, type) in entry.keys {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+                let value = type == "-int" ? "1" : "true"
+                proc.arguments = ["write", entry.bundle, key, type, value]
+                proc.standardOutput = Pipe()
+                proc.standardError = Pipe()
+                try? proc.run()
+                proc.waitUntilExit()
+            }
+        }
+        NSLog("NowBar BrowserJS: autoEnable defaults write done")
+    }
+
+    struct Snapshot {
+        var bundleID: String
+        var appName: String
+        var title: String
+        var artist: String
+        var artUrl: String
+        var isPlaying: Bool
+        var position: Double
+        var duration: Double
+    }
+
+    static func firstAudible() -> Snapshot? {
+        NSLog("NowBar BrowserJS: firstAudible start")
+        for entry in supported {
+            guard NSRunningApplication.runningApplications(withBundleIdentifier: entry.bundleID).first != nil
+            else { continue }
+            if let s = snapshot(entry: entry) {
+                NSLog("NowBar BrowserJS: match %@ title=%@ playing=%@", entry.bundleID, s.title, s.isPlaying ? "yes":"no")
+                return s
+            } else {
+                NSLog("NowBar BrowserJS: %@ no audible tab", entry.bundleID)
+            }
+        }
+        return nil
+    }
+
+    private static let separator = "@@~~@@"
+
+    private static let mediaHostsClause = #"{"youtube.com", "music.youtube.com", "soundcloud.com", "spotify.com", "twitch.tv", "vimeo.com", "netflix.com", "bandcamp.com", "mixcloud.com", "deezer.com", "tidal.com", "apple.com/music"}"#
+
+    private static func snapshotJS(sep: String) -> String {
+        return """
+        (function(){var m=document.querySelector('video,audio');if(!m)return '';\
+        var md=navigator.mediaSession&&navigator.mediaSession.metadata;\
+        var ti=(md&&md.title)||document.title||'';\
+        var ar=(md&&md.artist)||'';\
+        var aw=md&&md.artwork&&md.artwork[0]?md.artwork[0].src:'';\
+        var S='\(sep)';\
+        return (m.paused?'0':'1')+S+m.currentTime+S+(m.duration||0)+S+ti+S+ar+S+aw;})()
+        """
+    }
+
+    private static func snapshot(entry: (bundleID: String, appName: String, dialect: Dialect)) -> Snapshot? {
+        let sep = separator
+        let js = snapshotJS(sep: sep)
+        let escaped = js.replacingOccurrences(of: "\"", with: "\\\"")
+        let script: String
+        switch entry.dialect {
+        case .chromium:
+            script = """
+            tell application "\(entry.appName)"
+                if it is not running then return ""
+                set mediaHosts to \(mediaHostsClause)
+                repeat with w in windows
+                    try
+                        set t to active tab of w
+                        set u to URL of t as string
+                        repeat with h in mediaHosts
+                            if u contains h then
+                                set r to (execute t javascript "\(escaped)")
+                                if r is not "" and r is not missing value then return r as string
+                                exit repeat
+                            end if
+                        end repeat
+                    end try
+                end repeat
+                set scanned to 0
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        if scanned >= 40 then exit repeat
+                        set scanned to scanned + 1
+                        try
+                            set u to URL of t as string
+                            repeat with h in mediaHosts
+                                if u contains h then
+                                    set r to (execute t javascript "\(escaped)")
+                                    if r is not "" and r is not missing value then return r as string
+                                    exit repeat
+                                end if
+                            end repeat
+                        end try
+                    end repeat
+                    if scanned >= 40 then exit repeat
+                end repeat
+                return ""
+            end tell
+            """
+        case .safari:
+            script = """
+            tell application "\(entry.appName)"
+                if it is not running then return ""
+                set mediaHosts to \(mediaHostsClause)
+                repeat with w in windows
+                    try
+                        set t to current tab of w
+                        set u to URL of t as string
+                        repeat with h in mediaHosts
+                            if u contains h then
+                                set r to (do JavaScript "\(escaped)" in t)
+                                if r is not "" and r is not missing value then return r as string
+                                exit repeat
+                            end if
+                        end repeat
+                    end try
+                end repeat
+                set scanned to 0
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        if scanned >= 40 then exit repeat
+                        set scanned to scanned + 1
+                        try
+                            set u to URL of t as string
+                            repeat with h in mediaHosts
+                                if u contains h then
+                                    set r to (do JavaScript "\(escaped)" in t)
+                                    if r is not "" and r is not missing value then return r as string
+                                    exit repeat
+                                end if
+                            end repeat
+                        end try
+                    end repeat
+                    if scanned >= 40 then exit repeat
+                end repeat
+                return ""
+            end tell
+            """
+        }
+        guard let raw = runAppleScript(script), !raw.isEmpty else {
+            NSLog("NowBar BrowserJS: %@ raw empty", entry.bundleID)
+            return nil
+        }
+        NSLog("NowBar BrowserJS: %@ raw=%@", entry.bundleID, raw)
+        let parts = raw.components(separatedBy: sep)
+        guard parts.count >= 6 else { return nil }
+        let playing = parts[0] == "1"
+        let pos = Double(parts[1]) ?? 0
+        let dur = Double(parts[2]) ?? 0
+        return Snapshot(
+            bundleID: entry.bundleID, appName: entry.appName,
+            title: parts[3], artist: parts[4], artUrl: parts[5],
+            isPlaying: playing, position: pos, duration: dur
+        )
+    }
+
+    static func togglePlay(bundleID: String) {
+        runJS(bundleID: bundleID,
+              js: "var m=document.querySelector('video,audio');if(m){m.paused?m.play():m.pause()}")
+    }
+
+    static func next(bundleID: String) {
+        let js = "var sels=['.ytp-next-button','tp-yt-paper-icon-button.next-button','button[data-testid=control-button-skip-forward]','button[aria-label*=Next]','button[aria-label*=next]','button[aria-label*=Siguiente]','button[aria-label*=siguiente]','button[aria-label*=Suivant]','button[aria-label*=Nächster]'];for(var i=0;i<sels.length;i++){try{var b=document.querySelector(sels[i]);if(b){b.click();break}}catch(e){}}"
+        runJS(bundleID: bundleID, js: js)
+    }
+
+    static func previous(bundleID: String) {
+        let js = "var sels=['.ytp-prev-button','tp-yt-paper-icon-button.previous-button','button[data-testid=control-button-skip-back]','button[aria-label*=Previous]','button[aria-label*=previous]','button[aria-label*=Anterior]','button[aria-label*=anterior]','button[aria-label*=Précédent]','button[aria-label*=Vorheriger]'];var clicked=false;for(var i=0;i<sels.length;i++){try{var b=document.querySelector(sels[i]);if(b){b.click();clicked=true;break}}catch(e){}}if(!clicked){var m=document.querySelector('video,audio');if(m)m.currentTime=0}"
+        runJS(bundleID: bundleID, js: js)
+    }
+
+    static func seek(bundleID: String, seconds: Double) {
+        runJS(bundleID: bundleID,
+              js: "var m=document.querySelector('video,audio');if(m)m.currentTime=\(seconds)")
+    }
+
+    private static func runJS(bundleID: String, js: String) {
+        guard let entry = supported.first(where: { $0.bundleID == bundleID }) else { return }
+        let escaped = js.replacingOccurrences(of: "\"", with: "\\\"")
+        let script: String
+        switch entry.dialect {
+        case .chromium:
+            script = """
+            tell application "\(entry.appName)"
+                if it is not running then return
+                set mediaHosts to \(mediaHostsClause)
+                repeat with w in windows
+                    try
+                        set t to active tab of w
+                        set u to URL of t as string
+                        repeat with h in mediaHosts
+                            if u contains h then
+                                try
+                                    execute t javascript "\(escaped)"
+                                end try
+                                return
+                            end if
+                        end repeat
+                    end try
+                end repeat
+                set scanned to 0
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        if scanned >= 40 then exit repeat
+                        set scanned to scanned + 1
+                        try
+                            set u to URL of t as string
+                            repeat with h in mediaHosts
+                                if u contains h then
+                                    try
+                                        execute t javascript "\(escaped)"
+                                    end try
+                                    return
+                                end if
+                            end repeat
+                        end try
+                    end repeat
+                    if scanned >= 40 then exit repeat
+                end repeat
+            end tell
+            """
+        case .safari:
+            script = """
+            tell application "\(entry.appName)"
+                if it is not running then return
+                set mediaHosts to \(mediaHostsClause)
+                repeat with w in windows
+                    try
+                        set t to current tab of w
+                        set u to URL of t as string
+                        repeat with h in mediaHosts
+                            if u contains h then
+                                try
+                                    do JavaScript "\(escaped)" in t
+                                end try
+                                return
+                            end if
+                        end repeat
+                    end try
+                end repeat
+                set scanned to 0
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        if scanned >= 40 then exit repeat
+                        set scanned to scanned + 1
+                        try
+                            set u to URL of t as string
+                            repeat with h in mediaHosts
+                                if u contains h then
+                                    try
+                                        do JavaScript "\(escaped)" in t
+                                    end try
+                                    return
+                                end if
+                            end repeat
+                        end try
+                    end repeat
+                    if scanned >= 40 then exit repeat
+                end repeat
+            end tell
+            """
+        }
+        _ = runAppleScript(script)
+    }
+
+    private static func runAppleScript(_ source: String, timeout: TimeInterval = 4.0) -> String? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", source]
+        let out = Pipe()
+        let err = Pipe()
+        proc.standardOutput = out
+        proc.standardError = err
+        do {
+            try proc.run()
+        } catch {
+            NSLog("NowBar BrowserJS proc err: %@", error.localizedDescription)
+            return nil
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while proc.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if proc.isRunning {
+            proc.terminate()
+            Thread.sleep(forTimeInterval: 0.1)
+            if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+            NSLog("NowBar BrowserJS: osascript timeout, killed")
+            return nil
+        }
+        let outData = out.fileHandleForReading.readDataToEndOfFile()
+        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        if proc.terminationStatus != 0,
+           let msg = String(data: errData, encoding: .utf8), !msg.isEmpty {
+            NSLog("NowBar BrowserJS err: %@", msg)
+            return nil
+        }
+        return String(data: outData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+// MARK: - Process helpers
+
+@_silgen_name("responsibility_get_pid_responsible_for_pid")
+private func responsibility_get_pid_responsible_for_pid(_ pid: pid_t) -> pid_t
+
+enum ProcInspect {
+    static func path(forPID pid: pid_t) -> String? {
+        let bufSize = 4096
+        let buf = UnsafeMutablePointer<CChar>.allocate(capacity: bufSize)
+        defer { buf.deallocate() }
+        let len = proc_pidpath(pid, buf, UInt32(bufSize))
+        guard len > 0 else { return nil }
+        return String(cString: buf)
+    }
+
+    static func outermostAppBundleID(forPID pid: pid_t) -> String? {
+        guard let p = path(forPID: pid) else { return nil }
+        let parts = p.split(separator: "/", omittingEmptySubsequences: true)
+        var accum = ""
+        for part in parts {
+            accum += "/" + part
+            if part.hasSuffix(".app") {
+                return Bundle(path: accum)?.bundleIdentifier
+            }
+        }
+        return nil
+    }
+
+    static func resolveBundleID(forAudioPID pid: pid_t) -> String? {
+        if let app = NSRunningApplication(processIdentifier: pid),
+           let bid = app.bundleIdentifier {
+            return bid
+        }
+        if let bid = outermostAppBundleID(forPID: pid) {
+            return bid
+        }
+        let rp = responsibility_get_pid_responsible_for_pid(pid)
+        if rp > 0, rp != pid,
+           let app = NSRunningApplication(processIdentifier: rp),
+           let bid = app.bundleIdentifier {
+            return bid
+        }
+        return nil
+    }
+}
+
+// MARK: - Audio activity (CoreAudio HAL)
+
+enum AudioActivity {
+    private static let kProcessObjectList: AudioObjectPropertySelector = 0x70727323 // 'prs#'
+    private static let kProcessPID: AudioObjectPropertySelector = 0x70706964 // 'ppid'
+    private static let kProcessIsRunningOutput: AudioObjectPropertySelector = 0x70726F20 // 'pro '
+
+    static func playingProcessPIDs() -> Set<pid_t> {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size
+        )
+        guard status == noErr, size > 0 else { return [] }
+        let count = Int(size) / MemoryLayout<AudioObjectID>.size
+        var objects = [AudioObjectID](repeating: 0, count: count)
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &objects
+        )
+        guard status == noErr else { return [] }
+
+        var active: Set<pid_t> = []
+        for obj in objects {
+            var rAddr = AudioObjectPropertyAddress(
+                mSelector: kProcessIsRunningOutput,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var running: UInt32 = 0
+            var rSize: UInt32 = UInt32(MemoryLayout<UInt32>.size)
+            let rStat = AudioObjectGetPropertyData(obj, &rAddr, 0, nil, &rSize, &running)
+            guard rStat == noErr, running != 0 else { continue }
+
+            var pAddr = AudioObjectPropertyAddress(
+                mSelector: kProcessPID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var pid: pid_t = 0
+            var pSize: UInt32 = UInt32(MemoryLayout<pid_t>.size)
+            let pStat = AudioObjectGetPropertyData(obj, &pAddr, 0, nil, &pSize, &pid)
+            if pStat == noErr, pid > 0 { active.insert(pid) }
+        }
+        return active
+    }
+}
+
+// MARK: - System volume
+
+enum SystemVolume {
+    static func get() -> Int {
+        var err: NSDictionary?
+        guard let script = NSAppleScript(source: "output volume of (get volume settings)")
+        else { return 50 }
+        let r = script.executeAndReturnError(&err)
+        let v = Int(r.int32Value)
+        return v >= 0 ? v : 50
+    }
+    static func set(_ v: Int) {
+        let clamped = max(0, min(100, v))
+        var err: NSDictionary?
+        let script = NSAppleScript(source: "set volume output volume \(clamped)")
+        script?.executeAndReturnError(&err)
+    }
+}
+
+// MARK: - Media app detector
+
+enum MediaAppDetector {
+    static let knownBundles: [(String, String)] = [
+        ("com.apple.Music", "Music"),
+        ("com.apple.podcasts", "Podcasts"),
+        ("com.apple.Safari", "Safari"),
+        ("com.google.Chrome", "Chrome"),
+        ("com.brave.Browser", "Brave"),
+        ("com.microsoft.edgemac", "Edge"),
+        ("org.mozilla.firefox", "Firefox"),
+        ("company.thebrowser.Browser", "Arc"),
+        ("org.videolan.vlc", "VLC"),
+        ("com.colliderli.iina", "IINA"),
+        ("com.apple.QuickTimePlayerX", "QuickTime")
+    ]
+
+    static func running() -> [SpotifyTrack] {
+        knownBundles.compactMap { bid, fallback in
+            guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bid).first
+            else { return nil }
+            let name = app.localizedName ?? fallback
+            return SpotifyTrack(
+                name: name, artist: "", album: "", artUrl: "", artworkData: nil,
+                isPlaying: false, shuffling: false, repeating: false,
+                volume: 50, position: 0, duration: 0, isOff: false,
+                kind: .other, appName: name, bundleID: bid
+            )
+        }
+    }
+}
+
+// MARK: - Media keys
+
+enum MediaKey {
+    static let play: Int32 = 16
+    static let next: Int32 = 17
+    static let prev: Int32 = 18
+
+    @discardableResult
+    static func ensureAccessibility(prompt: Bool) -> Bool {
+        let key = "AXTrustedCheckOptionPrompt" as CFString
+        let opts = [key: prompt] as CFDictionary
+        return AXIsProcessTrustedWithOptions(opts)
+    }
+
+    static func post(_ keyCode: Int32) {
+        let ax = ensureAccessibility(prompt: true)
+        NSLog("NowBar MediaKey: post keyCode=%d ax=%@", keyCode, ax ? "true" : "false")
+        if !ax { return }
+        postEvent(keyCode: keyCode, down: true)
+        postEvent(keyCode: keyCode, down: false)
+    }
+
+    private static func postEvent(keyCode: Int32, down: Bool) {
+        let flags: Int = down ? 0xa00 : 0xb00
+        let data1 = (Int(keyCode) << 16) | flags
+        guard let ev = NSEvent.otherEvent(
+            with: .systemDefined,
+            location: .zero,
+            modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(flags)),
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            subtype: 8,
+            data1: data1,
+            data2: -1
+        ) else {
+            NSLog("NowBar MediaKey: NSEvent nil")
+            return
+        }
+        guard let cg = ev.cgEvent else {
+            NSLog("NowBar MediaKey: cgEvent nil down=%@", down ? "true" : "false")
+            return
+        }
+        cg.post(tap: .cghidEventTap)
+        NSLog("NowBar MediaKey: posted down=%@", down ? "true" : "false")
+    }
+}
+
+// MARK: - MediaRemote bridge
+
+struct MRInfo {
+    var title: String
+    var artist: String
+    var album: String
+    var duration: Double
+    var position: Double
+    var isPlaying: Bool
+    var artwork: Data?
+    var bundleID: String
+    var appName: String
+}
+
+final class MediaRemoteBridge {
+    static let shared = MediaRemoteBridge()
+
+    private typealias GetInfoFn = @convention(c) (DispatchQueue, @escaping ([String: Any]) -> Void) -> Void
+    private typealias GetPIDFn = @convention(c) (DispatchQueue, @escaping (Int32) -> Void) -> Void
+    private typealias SendCommandFn = @convention(c) (Int32, NSDictionary?) -> Bool
+    private typealias RegisterFn = @convention(c) (DispatchQueue) -> Void
+    private typealias SetElapsedFn = @convention(c) (Double) -> Void
+
+    private let getInfo: GetInfoFn?
+    private let getPID: GetPIDFn?
+    private let sendCommand: SendCommandFn?
+    private let setElapsed: SetElapsedFn?
+
+    private init() {
+        let url = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/MediaRemote.framework")
+        guard let bundle = CFBundleCreate(nil, url as CFURL) else {
+            getInfo = nil; getPID = nil; sendCommand = nil; setElapsed = nil
+            return
+        }
+        func load<T>(_ name: String) -> T? {
+            guard let ptr = CFBundleGetFunctionPointerForName(bundle, name as CFString) else { return nil }
+            return unsafeBitCast(ptr, to: T.self)
+        }
+        getInfo = load("MRMediaRemoteGetNowPlayingInfo")
+        getPID = load("MRMediaRemoteGetNowPlayingApplicationPID")
+        sendCommand = load("MRMediaRemoteSendCommand")
+        setElapsed = load("MRMediaRemoteSetElapsedTime")
+
+        if let register: RegisterFn = load("MRMediaRemoteRegisterForNowPlayingNotifications") {
+            register(.main)
+        }
+    }
+
+    func fetch(_ completion: @escaping (MRInfo?) -> Void) {
+        guard let getInfo, let getPID else {
+            NSLog("NowBar MR: symbols missing")
+            completion(nil); return
+        }
+        var info: [String: Any]?
+        var pid: Int32 = 0
+        let group = DispatchGroup()
+        group.enter()
+        getInfo(.main) { dict in
+            info = dict
+            group.leave()
+        }
+        group.enter()
+        getPID(.main) { p in
+            pid = p
+            group.leave()
+        }
+        group.notify(queue: .main) {
+            let dict = info ?? [:]
+            let app = pid > 0 ? NSRunningApplication(processIdentifier: pid) : nil
+            NSLog("NowBar MR: pid=%d bid=%@ dictKeys=%d",
+                  pid, app?.bundleIdentifier ?? "nil", dict.count)
+            completion(Self.build(from: dict, pid: pid))
+        }
+    }
+
+    func nowPlayingBundleID(_ completion: @escaping (String?) -> Void) {
+        guard let getPID else { completion(nil); return }
+        getPID(.main) { pid in
+            let bid = pid > 0 ? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier : nil
+            completion(bid)
+        }
+    }
+
+    @discardableResult
+    func send(_ command: Int32) -> Bool {
+        let ok = sendCommand?(command, nil) ?? false
+        NSLog("NowBar MR send: cmd=%d ok=%@", command, ok ? "true" : "false")
+        return ok
+    }
+
+    func seek(_ seconds: Double) {
+        setElapsed?(seconds)
+    }
+
+    private static func build(from info: [String: Any], pid: Int32) -> MRInfo? {
+        let app = pid > 0 ? NSRunningApplication(processIdentifier: pid) : nil
+        let title = info["kMRMediaRemoteNowPlayingInfoTitle"] as? String ?? ""
+        let hasInfo = !info.isEmpty
+        let hasApp = app != nil && (app?.bundleIdentifier ?? "").isEmpty == false
+        if !hasInfo && !hasApp { return nil }
+        let artist = info["kMRMediaRemoteNowPlayingInfoArtist"] as? String ?? ""
+        let album = info["kMRMediaRemoteNowPlayingInfoAlbum"] as? String ?? ""
+        let duration = (info["kMRMediaRemoteNowPlayingInfoDuration"] as? NSNumber)?.doubleValue ?? 0
+        let position = (info["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? NSNumber)?.doubleValue ?? 0
+        let rate = (info["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? 0
+        let art = info["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data
+        let appName = app?.localizedName ?? "Media"
+        let fallbackTitle = title.isEmpty ? appName : title
+        return MRInfo(
+            title: fallbackTitle, artist: artist, album: album,
+            duration: duration, position: position,
+            isPlaying: hasInfo ? rate > 0 : true,
+            artwork: art,
+            bundleID: app?.bundleIdentifier ?? "",
+            appName: appName
+        )
+    }
+}
+
+extension SpotifyTrack {
+    static func fromMR(_ info: MRInfo) -> SpotifyTrack {
+        SpotifyTrack(
+            name: info.title, artist: info.artist, album: info.album,
+            artUrl: "", artworkData: info.artwork,
+            isPlaying: info.isPlaying,
+            shuffling: false, repeating: false,
+            volume: 50, position: info.position, duration: info.duration,
+            isOff: false,
+            kind: .other, appName: info.appName, bundleID: info.bundleID
+        )
+    }
+}
+
+enum MRCommand {
+    static let play: Int32 = 0
+    static let pause: Int32 = 1
+    static let togglePlayPause: Int32 = 2
+    static let nextTrack: Int32 = 4
+    static let previousTrack: Int32 = 5
+}
+
 // MARK: - Shared state
 
 final class SpotifyState: ObservableObject {
     @Published var track: SpotifyTrack = .off
+    @Published private(set) var available: [SpotifyTrack] = []
+    private var spotifyTrack: SpotifyTrack = .off
+    private var musicTrack: SpotifyTrack = .musicOff
+    weak var settings: AppSettings?
     var onTrackChange: ((SpotifyTrack) -> Void)?
     private var lastKey: String = ""
 
     func refresh() {
-        let next = SpotifyAPI.currentTrack()
-        let newKey = next.isOff ? "" : "\(next.name)—\(next.artist)"
+        spotifyTrack = SpotifyAPI.currentTrack()
+        var mt = MusicAPI.currentTrack()
+        if !mt.isOff, let cached = MusicArtwork.cached(artist: mt.artist, name: mt.name) {
+            mt.artUrl = cached
+        }
+        musicTrack = mt
+        recompute()
+
+        if !mt.isOff && mt.artUrl.isEmpty {
+            let artist = mt.artist, name = mt.name
+            MusicArtwork.lookup(artist: artist, name: name) { [weak self] url in
+                guard let self, let url else { return }
+                if self.musicTrack.artist == artist && self.musicTrack.name == name {
+                    self.musicTrack.artUrl = url
+                    self.recompute()
+                }
+            }
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let snap = BrowserJS.firstAudible()
+            let sysVol = SystemVolume.get()
+            DispatchQueue.main.async {
+                if let snap {
+                    let sticky = self.otherTracks.contains { $0.bundleID == snap.bundleID }
+                    if snap.isPlaying || sticky {
+                        let name = snap.title.isEmpty ? snap.appName : snap.title
+                        self.otherTracks = [SpotifyTrack(
+                            name: name, artist: snap.artist, album: "",
+                            artUrl: snap.artUrl, artworkData: nil,
+                            isPlaying: snap.isPlaying, shuffling: false, repeating: false,
+                            volume: sysVol, position: snap.position, duration: snap.duration,
+                            isOff: false, kind: .other, appName: snap.appName, bundleID: snap.bundleID
+                        )]
+                    } else {
+                        self.otherTracks = []
+                    }
+                } else {
+                    self.otherTracks = []
+                }
+                self.recompute()
+            }
+        }
+    }
+
+    func optimisticTogglePlaying(for t: SpotifyTrack) {
+        guard !t.isSpotify && !t.isMusic else { return }
+        if let idx = otherTracks.firstIndex(where: { $0.bundleID == t.bundleID }) {
+            otherTracks[idx].isPlaying.toggle()
+            recompute()
+        }
+    }
+
+    func setSystemVolume(_ v: Int) {
+        SystemVolume.set(v)
+        for idx in otherTracks.indices { otherTracks[idx].volume = v }
+        recompute()
+    }
+
+    private var otherTracks: [SpotifyTrack] = []
+
+    private func recompute() {
+        var list: [SpotifyTrack] = []
+        if !spotifyTrack.isOff { list.append(spotifyTrack) }
+        if !musicTrack.isOff { list.append(musicTrack) }
+        list.append(contentsOf: otherTracks)
+        if available != list { available = list }
+
+        let next = pickActive(from: list)
+        let newKey = next.isOff ? "" : "\(next.bundleID)|\(next.name)—\(next.artist)"
         let changed = !next.isOff && !lastKey.isEmpty && newKey != lastKey
         if next != track { track = next }
         if changed { onTrackChange?(next) }
         lastKey = newKey
+    }
+
+    private func pickActive(from list: [SpotifyTrack]) -> SpotifyTrack {
+        if list.isEmpty { return .off }
+        if let pref = settings?.preferredSourceBundleID, !pref.isEmpty,
+           let match = list.first(where: { $0.bundleID == pref }) {
+            return match
+        }
+        if let playing = list.first(where: { $0.isPlaying }) { return playing }
+        if let sp = list.first(where: { $0.isSpotify }) { return sp }
+        if let mu = list.first(where: { $0.isMusic }) { return mu }
+        return list[0]
+    }
+
+    func setPreferredSource(_ bundleID: String) {
+        settings?.preferredSourceBundleID = bundleID
+        recompute()
     }
 
     func tickPosition() {
@@ -376,7 +1478,7 @@ final class SpotifyState: ObservableObject {
 
 // MARK: - UI state
 
-enum PanelMode { case player, settings, contextMenu, stats, statsData }
+enum PanelMode { case player, settings, contextMenu, stats, statsData, setup }
 
 final class UIState: ObservableObject {
     @Published var mode: PanelMode = .player
@@ -394,13 +1496,14 @@ struct RootView: View {
     var body: some View {
         switch ui.mode {
         case .player:
-            PopoverView(state: state, settings: settings)
+            PopoverView(state: state, settings: settings, onOpenSetup: { ui.mode = .setup })
         case .settings:
             SettingsView(settings: settings, onOpenStats: { ui.mode = .stats })
         case .contextMenu:
             ContextMenuView(
                 lang: settings.language,
                 onSettings: { ui.mode = .settings },
+                onSetup: { ui.mode = .setup },
                 onQuit: onQuit
             )
         case .stats:
@@ -416,6 +1519,11 @@ struct RootView: View {
                 settings: settings,
                 onBack: { ui.mode = .stats }
             )
+        case .setup:
+            SetupWizardView(
+                settings: settings,
+                onDone: { ui.mode = .player }
+            )
         }
     }
 }
@@ -425,16 +1533,18 @@ struct RootView: View {
 struct ContextMenuView: View {
     let lang: String
     let onSettings: () -> Void
+    let onSetup: () -> Void
     let onQuit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             MenuRow(icon: "gearshape", label: tr("settings", lang), action: onSettings)
+            MenuRow(icon: "globe", label: tr("setup_browsers_menu", lang), action: onSetup)
             Divider().padding(.vertical, 2)
             MenuRow(icon: "power", label: tr("quit", lang), action: onQuit)
         }
         .padding(6)
-        .frame(width: 180)
+        .frame(width: 200)
     }
 }
 
@@ -505,6 +1615,7 @@ enum ImageColor {
 
 struct AlbumArtView: View {
     let url: String
+    let data: Data?
     let isPlaying: Bool
     let vinyl: Bool
     let size: CGFloat
@@ -514,17 +1625,10 @@ struct AlbumArtView: View {
 
     var body: some View {
         ZStack {
-            AsyncImage(url: URL(string: url)) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().aspectRatio(contentMode: .fill)
-                default:
-                    Rectangle().fill(.quaternary)
-                }
-            }
-            .frame(width: size, height: size)
-            .clipShape(vinyl ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8)))
-            .rotationEffect(.degrees(vinyl ? angle : 0))
+            artwork
+                .frame(width: size, height: size)
+                .clipShape(vinyl ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8)))
+                .rotationEffect(.degrees(vinyl ? angle : 0))
 
             if vinyl {
                 Circle()
@@ -541,6 +1645,24 @@ struct AlbumArtView: View {
         .onDisappear { timer?.invalidate() }
         .onChange(of: isPlaying) { _, _ in updateTimer() }
         .onChange(of: vinyl) { _, _ in updateTimer() }
+    }
+
+    @ViewBuilder
+    private var artwork: some View {
+        if let data, let img = NSImage(data: data) {
+            Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+        } else if let u = URL(string: url), !url.isEmpty {
+            AsyncImage(url: u) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().aspectRatio(contentMode: .fill)
+                default:
+                    Rectangle().fill(.quaternary)
+                }
+            }
+        } else {
+            Rectangle().fill(.quaternary)
+        }
     }
 
     private func updateTimer() {
@@ -597,6 +1719,7 @@ struct MarqueeText: View {
             }
         }
         .offset(x: needsScroll ? offset : 0)
+        .id(runID)
     }
 
     private var textReader: some View {
@@ -637,32 +1760,82 @@ struct MarqueeText: View {
 struct PopoverView: View {
     @ObservedObject var state: SpotifyState
     @ObservedObject var settings: AppSettings
+    var onOpenSetup: () -> Void = {}
     @State private var accent: Color? = nil
+    @State private var bannerDismissed = false
+    @State private var anyBrowserUnconfigured = false
+
+    private var showBanner: Bool {
+        !settings.onboardingCompleted && !bannerDismissed && anyBrowserUnconfigured
+    }
 
     var body: some View {
         let t = state.track
+        VStack(spacing: 0) {
+            if showBanner {
+                SetupBanner(
+                    lang: settings.language,
+                    onOpen: {
+                        onOpenSetup()
+                    },
+                    onDismiss: { bannerDismissed = true }
+                )
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+                .frame(width: 360)
+            }
+            contentBody(t: t)
+        }
+        .onAppear { refreshBrowserBannerStatus() }
+    }
+
+    @ViewBuilder
+    private func contentBody(t: SpotifyTrack) -> some View {
         Group {
             if t.isOff {
-                VStack {
-                    Text(tr("spotify_off", settings.language))
+                VStack(spacing: 14) {
+                    Text(tr("nothing_playing", settings.language))
                         .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Button(tr("open_spotify", settings.language)) {
+                            openApp(bundleID: "com.spotify.client")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        Button(tr("open_music", settings.language)) {
+                            openApp(bundleID: "com.apple.Music")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.pink)
+                    }
                 }
-                .frame(width: 320, height: 120)
+                .frame(width: 360, height: 140)
             } else {
                 VStack(spacing: 8) {
+                    if state.available.count > 1 {
+                        SourceSwitcher(state: state, settings: settings)
+                    }
                     HStack(alignment: .top, spacing: 12) {
                         if settings.showImage {
-                            AlbumArtView(
-                                url: t.artUrl,
-                                isPlaying: t.isPlaying,
-                                vinyl: settings.vinylEnabled,
-                                size: 96
-                            )
+                            Button { openSource(t) } label: {
+                                AlbumArtView(
+                                    url: t.artUrl,
+                                    data: t.artworkData,
+                                    isPlaying: t.isPlaying,
+                                    vinyl: settings.vinylEnabled,
+                                    size: 96
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .help(t.appName)
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
                             if settings.showTitle {
-                                MarqueeText(text: t.name, font: .system(size: 13, weight: .semibold))
+                                Button { openSource(t) } label: {
+                                    MarqueeText(text: t.name, font: .system(size: 13, weight: .semibold))
+                                }
+                                .buttonStyle(.plain)
                             }
                             if settings.showArtist {
                                 MarqueeText(text: t.artist, font: .system(size: 11))
@@ -676,24 +1849,35 @@ struct PopoverView: View {
 
                             HStack(spacing: 5) {
                                 ControlButton(system: "backward.fill") {
-                                    SpotifyAPI.perform("previous track")
+                                    sendPrevious(t)
                                     state.refresh()
                                 }
                                 ControlButton(system: t.isPlaying ? "pause.fill" : "play.fill") {
-                                    SpotifyAPI.perform("playpause")
+                                    sendPlayPause(t)
                                     state.refresh()
                                 }
                                 ControlButton(system: "forward.fill") {
-                                    SpotifyAPI.perform("next track")
+                                    sendNext(t)
                                     state.refresh()
                                 }
-                                ControlButton(system: "shuffle", active: t.shuffling) {
-                                    SpotifyAPI.toggleShuffle(!t.shuffling)
-                                    state.refresh()
-                                }
-                                ControlButton(system: "repeat", active: t.repeating) {
-                                    SpotifyAPI.toggleRepeat(!t.repeating)
-                                    state.refresh()
+                                if t.isSpotify {
+                                    ControlButton(system: "shuffle", active: t.shuffling) {
+                                        SpotifyAPI.toggleShuffle(!t.shuffling)
+                                        state.refresh()
+                                    }
+                                    ControlButton(system: "repeat", active: t.repeating) {
+                                        SpotifyAPI.toggleRepeat(!t.repeating)
+                                        state.refresh()
+                                    }
+                                } else if t.isMusic {
+                                    ControlButton(system: "shuffle", active: t.shuffling) {
+                                        MusicAPI.toggleShuffle(!t.shuffling)
+                                        state.refresh()
+                                    }
+                                    ControlButton(system: "repeat", active: t.repeating) {
+                                        MusicAPI.toggleRepeat(!t.repeating)
+                                        state.refresh()
+                                    }
                                 }
                             }
                         }
@@ -723,6 +1907,74 @@ struct PopoverView: View {
         }
     }
 
+    private func refreshBrowserBannerStatus() {
+        if settings.onboardingCompleted { return }
+        DispatchQueue.global(qos: .utility).async {
+            let any = BrowserSetup.anyUnconfiguredRunning()
+            DispatchQueue.main.async { anyBrowserUnconfigured = any }
+        }
+    }
+
+    private func sendPrevious(_ t: SpotifyTrack) {
+        if t.isSpotify { SpotifyAPI.perform("previous track"); return }
+        if t.isMusic { MusicAPI.perform("previous track"); return }
+        BrowserJS.previous(bundleID: t.bundleID)
+    }
+
+    private func sendPlayPause(_ t: SpotifyTrack) {
+        if t.isSpotify { SpotifyAPI.perform("playpause"); return }
+        if t.isMusic { MusicAPI.perform("playpause"); return }
+        state.optimisticTogglePlaying(for: t)
+        BrowserJS.togglePlay(bundleID: t.bundleID)
+    }
+
+    private func sendNext(_ t: SpotifyTrack) {
+        if t.isSpotify { SpotifyAPI.perform("next track"); return }
+        if t.isMusic { MusicAPI.perform("next track"); return }
+        BrowserJS.next(bundleID: t.bundleID)
+    }
+
+    private func openSource(_ t: SpotifyTrack) {
+        if t.isMusic { MusicAPI.reveal() }
+        activateAndUnminimize(appName: t.appName, bundleID: t.bundleID)
+    }
+
+    private func openApp(bundleID: String) {
+        let name = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
+            ?? (NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)?.deletingPathExtension().lastPathComponent)
+            ?? ""
+        activateAndUnminimize(appName: name, bundleID: bundleID)
+    }
+
+    private func activateAndUnminimize(appName: String, bundleID: String) {
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            let cfg = NSWorkspace.OpenConfiguration()
+            cfg.activates = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: cfg, completionHandler: nil)
+        }
+        guard !appName.isEmpty else { return }
+        let src = """
+        tell application "\(appName)"
+            activate
+            try
+                repeat with w in windows
+                    try
+                        set miniaturized of w to false
+                    end try
+                    try
+                        set visible of w to true
+                    end try
+                end repeat
+            end try
+            try
+                reopen
+            end try
+        end tell
+        """
+        var err: NSDictionary?
+        NSAppleScript(source: src)?.executeAndReturnError(&err)
+    }
+
     @ViewBuilder
     private var tintBackground: some View {
         if settings.accentFromArt, let c = accent {
@@ -741,6 +1993,167 @@ struct PopoverView: View {
         if let c = await ImageColor.dominant(urlString: url) {
             await MainActor.run { accent = c }
         }
+    }
+}
+
+// MARK: - Setup wizard (browser onboarding)
+
+struct SetupWizardView: View {
+    @ObservedObject var settings: AppSettings
+    let onDone: () -> Void
+    @State private var entries: [(entry: (bundleID: String, appName: String, dialect: BrowserJS.Dialect), status: BrowserSetup.Status)] = []
+    @State private var refreshing = false
+
+    private var visible: [(entry: (bundleID: String, appName: String, dialect: BrowserJS.Dialect), status: BrowserSetup.Status)] {
+        entries.filter { $0.status != .notInstalled }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(tr("setup_title", settings.language))
+                .font(.system(size: 14, weight: .semibold))
+            Text(tr("setup_subtitle", settings.language))
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if visible.isEmpty {
+                Text(tr("setup_status_not_installed", settings.language))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 12)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(visible, id: \.entry.bundleID) { row in
+                        BrowserSetupRow(
+                            entry: row.entry,
+                            status: row.status,
+                            lang: settings.language,
+                            onOpen: { BrowserSetup.activate(row.entry) },
+                            onRefresh: refresh
+                        )
+                    }
+                }
+            }
+
+            HStack {
+                Button(tr("setup_recheck", settings.language)) { refresh() }
+                    .disabled(refreshing)
+                Spacer()
+                Button(tr("setup_skip", settings.language)) {
+                    settings.onboardingCompleted = true
+                    onDone()
+                }
+                Button(tr("setup_done", settings.language)) {
+                    settings.onboardingCompleted = true
+                    onDone()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(12)
+        .frame(width: 400)
+        .onAppear { refresh() }
+    }
+
+    private func refresh() {
+        refreshing = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let all = BrowserSetup.allStatuses()
+            DispatchQueue.main.async {
+                entries = all
+                refreshing = false
+            }
+        }
+    }
+}
+
+struct BrowserSetupRow: View {
+    let entry: (bundleID: String, appName: String, dialect: BrowserJS.Dialect)
+    let status: BrowserSetup.Status
+    let lang: String
+    let onOpen: () -> Void
+    let onRefresh: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: status == .configured ? "checkmark.circle.fill" : (status == .notRunning ? "moon.zzz" : "exclamationmark.triangle.fill"))
+                .foregroundStyle(statusColor)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.appName).font(.system(size: 12, weight: .medium))
+                Text(instruction).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Text(statusLabel)
+                .font(.system(size: 10))
+                .foregroundStyle(statusColor)
+            if status != .configured {
+                Button(tr("setup_open_browser", lang)) { onOpen() }
+                    .controlSize(.small)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.08)))
+    }
+
+    private var instruction: String {
+        switch entry.dialect {
+        case .chromium: return tr("setup_instruction_chromium", lang)
+        case .safari: return tr("setup_instruction_safari", lang)
+        }
+    }
+
+    private var statusLabel: String {
+        switch status {
+        case .configured: return tr("setup_status_configured", lang)
+        case .unconfigured: return tr("setup_status_unconfigured", lang)
+        case .notRunning: return tr("setup_status_not_running", lang)
+        case .notInstalled: return tr("setup_status_not_installed", lang)
+        }
+    }
+
+    private var statusColor: Color {
+        switch status {
+        case .configured: return .green
+        case .unconfigured: return .orange
+        case .notRunning: return .secondary
+        case .notInstalled: return .secondary
+        }
+    }
+}
+
+struct SetupBanner: View {
+    let lang: String
+    let onOpen: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "globe")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tr("setup_banner_title", lang))
+                    .font(.system(size: 11, weight: .semibold))
+                Text(tr("setup_banner_subtitle", lang))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(tr("setup_open_browser", lang)) { onOpen() }
+                .controlSize(.small)
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.orange.opacity(0.12)))
     }
 }
 
@@ -768,6 +2181,58 @@ struct ControlButton: View {
     private var backgroundColor: Color {
         if active { return Color.green.opacity(hover ? 0.25 : 0.15) }
         return Color.primary.opacity(hover ? 0.15 : 0.08)
+    }
+}
+
+// MARK: - Source switcher
+
+struct SourceSwitcher: View {
+    @ObservedObject var state: SpotifyState
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(state.available, id: \.bundleID) { src in
+                pill(for: src)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func pill(for src: SpotifyTrack) -> some View {
+        let active = src.bundleID == state.track.bundleID
+        let accent = pillTint(for: src)
+        return Button(action: {
+            state.setPreferredSource(src.bundleID)
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: pillIcon(for: src))
+                    .font(.system(size: 9, weight: .medium))
+                Text(src.appName)
+                    .font(.system(size: 10, weight: active ? .semibold : .regular))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(active ? accent.opacity(0.22) : Color.primary.opacity(0.08))
+            )
+            .foregroundStyle(active ? accent : Color.primary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func pillIcon(for src: SpotifyTrack) -> String {
+        if src.isSpotify { return "music.note" }
+        if src.isMusic { return "music.note.list" }
+        return "dot.radiowaves.left.and.right"
+    }
+
+    private func pillTint(for src: SpotifyTrack) -> Color {
+        if src.isSpotify { return .green }
+        if src.isMusic { return .pink }
+        return .blue
     }
 }
 
@@ -863,10 +2328,10 @@ struct VerticalVolumeSlider: View {
                 onChanged: { pct in
                     editing = true
                     localValue = pct * 100
-                    SpotifyAPI.setVolume(Int(localValue))
+                    applyVolume()
                 },
                 onEnded: {
-                    SpotifyAPI.setVolume(Int(localValue))
+                    applyVolume()
                     editing = false
                 }
             )
@@ -890,6 +2355,13 @@ struct VerticalVolumeSlider: View {
         if v < 66 { return "speaker.wave.2.fill" }
         return "speaker.wave.3.fill"
     }
+
+    private func applyVolume() {
+        let v = Int(localValue)
+        if state.track.isSpotify { SpotifyAPI.setVolume(v) }
+        else if state.track.isMusic { MusicAPI.setVolume(v) }
+        else { state.setSystemVolume(v) }
+    }
 }
 
 struct ProgressSlider: View {
@@ -908,7 +2380,9 @@ struct ProgressSlider: View {
                     localValue = pct * duration
                 },
                 onEnded: {
-                    SpotifyAPI.seek(localValue)
+                    if state.track.isSpotify { SpotifyAPI.seek(localValue) }
+                    else if state.track.isMusic { MusicAPI.seek(localValue) }
+                    else { BrowserJS.seek(bundleID: state.track.bundleID, seconds: localValue) }
                     state.track.position = localValue
                     editing = false
                 }
@@ -1470,7 +2944,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var modeCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.global(qos: .utility).async {
+            BrowserJS.autoEnableJavaScriptFromAppleEvents()
+        }
         stats.settings = settings
+        state.settings = settings
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "♪ —"
@@ -1550,11 +3028,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(spotifyChanged),
+            name: NSNotification.Name("com.apple.Music.playerInfo"),
+            object: nil
+        )
+
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(spotifyChanged),
+            name: NSNotification.Name("kMRMediaRemoteNowPlayingInfoDidChangeNotification"),
+            object: nil
+        )
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(spotifyChanged),
+            name: NSNotification.Name("kMRMediaRemoteNowPlayingApplicationIsPlayingDidChangeNotification"),
+            object: nil
+        )
+
         modeCancellable = ui.$mode
             .dropFirst()
             .sink { [weak self] _ in
                 DispatchQueue.main.async { self?.resizePanelForMode() }
             }
+
+        if !settings.onboardingCompleted {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                self?.presentSetupOnFirstLaunch()
+            }
+        }
+    }
+
+    private func presentSetupOnFirstLaunch() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let any = BrowserSetup.anyUnconfiguredRunning()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard !self.settings.onboardingCompleted else { return }
+                if any {
+                    self.ui.mode = .setup
+                    self.showPanel()
+                }
+            }
+        }
     }
 
     @objc private func spotifyChanged() {
