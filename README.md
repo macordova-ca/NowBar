@@ -4,11 +4,19 @@ App nativa para la barra de menú de macOS. Construida con Swift + SwiftUI + App
 
 ## Descarga
 
-1. **[Descargar NowBar.dmg](https://github.com/macordova-ca/NowBar/releases/latest/download/NowBar.dmg)** (última versión)
+1. **[Descargar NowBar.dmg](https://github.com/macordova-ca/NowBar/releases/latest/download/NowBar.dmg)** (universal: Intel + Apple Silicon)
 2. Abre el `.dmg` y arrastra **NowBar.app** a la carpeta **Applications**
-3. Abre NowBar desde Launchpad o Finder. La primera vez macOS puede bloquear la app porque la firma es ad-hoc:
-   - Click derecho sobre **NowBar.app** → **Abrir** → confirma en el diálogo
+3. Abre NowBar la primera vez (elige una opción):
+   - **Opción A** (recomendada): Finder → `Applications` → click derecho sobre **NowBar** → **Abrir** → confirma en el diálogo
+   - **Opción B**: si macOS dice "dañado" o "no se puede abrir" (por Gatekeeper + quarantine), ejecuta en Terminal:
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/NowBar.app
+     open /Applications/NowBar.app
+     ```
+   - **Opción C**: Ajustes del Sistema → Privacidad y Seguridad → busca "NowBar fue bloqueado" y pulsa **Abrir de todos modos**
 4. El icono ♪ aparece en la barra de menú. El wizard interno te guía para habilitar los navegadores que uses.
+
+> El binario es universal y la firma es ad-hoc (sin Apple Developer ID de $99/año). Por eso macOS pide confirmación la primera vez. Las siguientes ejecuciones abren sin diálogo.
 
 Si prefieres compilar desde código, ve a [Instalación desde cero](#instalación-desde-cero).
 

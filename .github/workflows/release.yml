@@ -19,18 +19,28 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Build release binary
-        run: swift build -c release
+      - name: Build universal release binary (x86_64 + arm64)
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+        run: |
+          swift build -c release --arch x86_64 --arch arm64
+          BIN=".build/apple/Products/Release/NowBar"
+          if [ ! -f "$BIN" ]; then BIN=".build/release/NowBar"; fi
+          file "$BIN"
 
       - name: Package .app bundle
         run: |
           APP="NowBar.app"
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          cp .build/release/NowBar "$APP/Contents/MacOS/NowBar"
+          BIN=".build/apple/Products/Release/NowBar"
+          if [ ! -f "$BIN" ]; then BIN=".build/release/NowBar"; fi
+          cp "$BIN" "$APP/Contents/MacOS/NowBar"
           cp Info.plist "$APP/Contents/Info.plist"
           cp nowbar-icon.icns "$APP/Contents/Resources/nowbar-icon.icns"
+          xattr -cr "$APP"
           codesign --force --deep --sign - "$APP"
+          file "$APP/Contents/MacOS/NowBar"
 
       - name: Install create-dmg
         run: brew install create-dmg
@@ -68,9 +78,18 @@ jobs:
           body: |
             ## Instalación
 
-            1. Descarga el `.dmg` de abajo
+            1. Descarga **NowBar.dmg** (abajo)
             2. Ábrelo y arrastra **NowBar** a la carpeta **Applications**
-            3. Al primer launch macOS puede bloquear la app. Click derecho → **Abrir** → confirma
-            4. El wizard de NowBar te guía para habilitar los navegadores que uses
+            3. Abrir la app la primera vez (elige una opción):
+               - **Opción A** — Finder → `Applications` → click derecho sobre **NowBar** → **Abrir** → confirma en el diálogo
+               - **Opción B** — si dice "dañado" o "no se puede abrir", ejecuta en Terminal:
+                 ```bash
+                 xattr -dr com.apple.quarantine /Applications/NowBar.app
+                 open /Applications/NowBar.app
+                 ```
+               - **Opción C** — Ajustes del Sistema → Privacidad y Seguridad → busca "NowBar fue bloqueado" → **Abrir de todos modos**
+            4. El wizard interno te guía para habilitar los navegadores
+
+            El binario es universal (Intel + Apple Silicon). La firma es ad-hoc (sin Apple Developer ID), por eso macOS pide confirmación la primera vez.
 
             Ver [README](../blob/main/README.md) para detalles.
