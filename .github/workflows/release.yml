@@ -38,6 +38,11 @@ jobs:
           cp "$BIN" "$APP/Contents/MacOS/NowBar"
           cp Info.plist "$APP/Contents/Info.plist"
           cp nowbar-icon.icns "$APP/Contents/Resources/nowbar-icon.icns"
+          # The in-app updater compares this version against the latest release tag.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${GITHUB_REF_NAME#v}" "$APP/Contents/Info.plist"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" "$APP/Contents/Info.plist"
+          fi
           xattr -cr "$APP"
           codesign --force --deep --sign - "$APP"
           file "$APP/Contents/MacOS/NowBar"
@@ -61,19 +66,24 @@ jobs:
             --app-drop-link 440 190 \
             "$DMG" \
             "NowBar.app"
+          shasum -a 256 "$DMG" | awk '{print $1}' > "$DMG.sha256"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: NowBar-dmg
-          path: ${{ env.DMG }}
+          path: |
+            ${{ env.DMG }}
+            ${{ env.DMG }}.sha256
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.DMG }}
+          files: |
+            ${{ env.DMG }}
+            ${{ env.DMG }}.sha256
           generate_release_notes: true
           body: |
             ## Instalación

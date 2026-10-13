@@ -5,6 +5,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import CoreAudio
 import Darwin
+import CryptoKit
 
 // MARK: - Model
 
@@ -76,6 +77,7 @@ final class AppSettings: ObservableObject {
     @Published var language: String { didSet { save() } }
     @Published var preferredSourceBundleID: String { didSet { save() } }
     @Published var onboardingCompleted: Bool { didSet { save() } }
+    @Published var autoCheckUpdates: Bool { didSet { save() } }
 
     init() {
         let d = UserDefaults.standard
@@ -106,6 +108,7 @@ final class AppSettings: ObservableObject {
         language = d.string(forKey: "language") ?? defaultLang
         preferredSourceBundleID = d.string(forKey: "preferredSourceBundleID") ?? ""
         onboardingCompleted = d.object(forKey: "onboardingCompleted") as? Bool ?? false
+        autoCheckUpdates = d.object(forKey: "autoCheckUpdates") as? Bool ?? true
     }
 
     private func save() {
@@ -129,6 +132,7 @@ final class AppSettings: ObservableObject {
         d.set(language, forKey: "language")
         d.set(preferredSourceBundleID, forKey: "preferredSourceBundleID")
         d.set(onboardingCompleted, forKey: "onboardingCompleted")
+        d.set(autoCheckUpdates, forKey: "autoCheckUpdates")
     }
 }
 
@@ -286,7 +290,33 @@ enum L10n {
         "minutes": ["en": "Minutes", "es": "Minutos", "zh": "分钟"],
         "quit": ["en": "Quit NowBar", "es": "Cerrar NowBar", "zh": "退出 NowBar"],
         "setup_browsers_menu": ["en": "Set up browsers", "es": "Configurar navegadores", "zh": "设置浏览器"],
-        "language": ["en": "Language", "es": "Idioma", "zh": "语言"]
+        "language": ["en": "Language", "es": "Idioma", "zh": "语言"],
+        "updates": ["en": "Updates", "es": "Actualizaciones", "zh": "更新"],
+        "auto_check_updates": ["en": "Check on launch", "es": "Buscar al abrir", "zh": "启动时检查"],
+        "current_version": ["en": "Current version", "es": "Versión actual", "zh": "当前版本"],
+        "check_updates": ["en": "Check for updates", "es": "Buscar actualizaciones", "zh": "检查更新"],
+        "update_checking": ["en": "Checking…", "es": "Buscando…", "zh": "正在检查…"],
+        "update_up_to_date": ["en": "NowBar is up to date", "es": "NowBar está actualizado", "zh": "NowBar 已是最新版本"],
+        "update_available": ["en": "NowBar %@ available", "es": "NowBar %@ disponible", "zh": "NowBar %@ 可用"],
+        "update_release_notes": ["en": "What's new", "es": "Ver novedades", "zh": "新功能"],
+        "update_install": ["en": "Download and install", "es": "Descargar e instalar", "zh": "下载并安装"],
+        "update_view": ["en": "View", "es": "Ver", "zh": "查看"],
+        "update_step_download": ["en": "Download", "es": "Descargar", "zh": "下载"],
+        "update_step_verify": ["en": "Verify", "es": "Verificar", "zh": "验证"],
+        "update_step_install": ["en": "Install", "es": "Instalar", "zh": "安装"],
+        "update_step_restart": ["en": "Restart", "es": "Reiniciar", "zh": "重启"],
+        "update_downloading": ["en": "Downloading…", "es": "Descargando…", "zh": "正在下载…"],
+        "update_verifying": ["en": "Verifying download…", "es": "Verificando descarga…", "zh": "正在验证…"],
+        "update_installing": ["en": "Installing…", "es": "Instalando…", "zh": "正在安装…"],
+        "update_ready": ["en": "Update installed. Restart to use it.", "es": "Actualización instalada. Reinicia para usarla.", "zh": "更新已安装，重启后生效。"],
+        "update_restart": ["en": "Restart NowBar", "es": "Reiniciar NowBar", "zh": "重启 NowBar"],
+        "update_retry": ["en": "Retry", "es": "Reintentar", "zh": "重试"],
+        "update_err_network": ["en": "Couldn't reach GitHub. Check your connection.", "es": "No se pudo conectar con GitHub. Revisa tu conexión.", "zh": "无法连接 GitHub，请检查网络。"],
+        "update_err_no_asset": ["en": "This release has no installable package.", "es": "Esta versión no tiene un paquete instalable.", "zh": "此版本没有可安装的包。"],
+        "update_err_checksum": ["en": "The download is corrupted. Try again.", "es": "La descarga está dañada. Inténtalo de nuevo.", "zh": "下载已损坏，请重试。"],
+        "update_err_bad_package": ["en": "The downloaded app isn't valid.", "es": "La app descargada no es válida.", "zh": "下载的应用无效。"],
+        "update_err_not_writable": ["en": "Move NowBar to Applications to update it.", "es": "Mueve NowBar a Aplicaciones para poder actualizarlo.", "zh": "请将 NowBar 移到“应用程序”后再更新。"],
+        "update_err_install": ["en": "Couldn't replace the app.", "es": "No se pudo reemplazar la app.", "zh": "无法替换应用。"]
     ]
 
     static func t(_ key: String, _ lang: String) -> String {
@@ -1408,6 +1438,367 @@ enum SourceLauncher {
     }
 }
 
+// MARK: - Updater
+
+enum UpdateError: String, Error {
+    case network = "update_err_network"
+    case noAsset = "update_err_no_asset"
+    case checksumMismatch = "update_err_checksum"
+    case badPackage = "update_err_bad_package"
+    case notWritable = "update_err_not_writable"
+    case installFailed = "update_err_install"
+}
+
+enum UpdatePhase: Equatable {
+    case idle
+    case checking
+    case upToDate
+    case available
+    case downloading(received: Int64, total: Int64)
+    case verifying
+    case installing
+    case readyToRestart
+    case failed(UpdateError)
+}
+
+enum UpdateStep: Int, CaseIterable {
+    case download, verify, install, restart
+
+    var labelKey: String {
+        switch self {
+        case .download: return "update_step_download"
+        case .verify: return "update_step_verify"
+        case .install: return "update_step_install"
+        case .restart: return "update_step_restart"
+        }
+    }
+}
+
+struct ReleaseInfo: Equatable {
+    let version: String
+    let pageURL: URL
+    let dmgURL: URL
+    let checksumURL: URL?
+}
+
+@MainActor
+final class Updater: ObservableObject {
+    nonisolated private static let repo = "macordova-ca/NowBar"
+    nonisolated private static let dmgName = "NowBar.dmg"
+    nonisolated private static let checksumName = "NowBar.dmg.sha256"
+    private static let firstCheckDelay: TimeInterval = 10
+    nonisolated private static let chunkSize = 64 * 1024
+
+    @Published private(set) var phase: UpdatePhase = .idle
+    @Published private(set) var latest: ReleaseInfo?
+    @Published var bannerDismissed = false
+
+    let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    weak var settings: AppSettings?
+
+    var isBusy: Bool {
+        switch phase {
+        case .checking, .downloading, .verifying, .installing: return true
+        default: return false
+        }
+    }
+
+    // Step currently in progress (or just finished, for readyToRestart); nil outside the install flow.
+    var currentStep: UpdateStep? {
+        switch phase {
+        case .downloading: return .download
+        case .verifying: return .verify
+        case .installing: return .install
+        case .readyToRestart: return .restart
+        default: return nil
+        }
+    }
+
+    func start() {
+        Self.cleanWorkDir()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.firstCheckDelay) { [weak self] in
+            guard let self, self.settings?.autoCheckUpdates ?? true else { return }
+            self.check()
+        }
+    }
+
+    func check() {
+        guard !isBusy, phase != .readyToRestart else { return }
+        phase = .checking
+        Task {
+            do {
+                let info = try await Self.fetchLatest()
+                if Self.isNewer(info.version, than: currentVersion) {
+                    if latest?.version != info.version { bannerDismissed = false }
+                    latest = info
+                    phase = .available
+                } else {
+                    latest = nil
+                    phase = .upToDate
+                }
+            } catch {
+                phase = .failed(.network)
+            }
+        }
+    }
+
+    func install() {
+        guard latest != nil, !isBusy, phase != .readyToRestart else { return }
+        guard Self.canReplaceRunningApp() else {
+            phase = .failed(.notWritable)
+            return
+        }
+        phase = .downloading(received: 0, total: 0)
+        Task {
+            do {
+                // Re-read the release: assets may have changed since the launch check.
+                let latest = try await Self.fetchLatest()
+                self.latest = latest
+                guard let checksumURL = latest.checksumURL else { throw UpdateError.noAsset }
+                let workDir = try Self.makeWorkDir()
+                let dmg = workDir.appendingPathComponent(Self.dmgName)
+                let digest = try await Self.download(latest.dmgURL, to: dmg) { [weak self] received, total in
+                    Task { @MainActor in
+                        guard let self, case .downloading = self.phase else { return }
+                        self.phase = .downloading(received: received, total: total)
+                    }
+                }
+                phase = .verifying
+                let expected = try await Self.fetchChecksum(checksumURL)
+                guard digest == expected else { throw UpdateError.checksumMismatch }
+                let staged = try await Self.extractApp(from: dmg, into: workDir)
+                phase = .installing
+                try await Self.replaceRunningApp(with: staged, backupDir: workDir)
+                phase = .readyToRestart
+            } catch let error as UpdateError {
+                phase = .failed(error)
+            } catch is URLError {
+                phase = .failed(.network)
+            } catch {
+                phase = .failed(.installFailed)
+            }
+        }
+    }
+
+    func retry() {
+        if latest != nil { install() } else { check() }
+    }
+
+    func restart() {
+        guard phase == .readyToRestart else { return }
+        // A detached shell waits for this process to exit before reopening the bundle,
+        // because the entry point refuses to start while another instance is running.
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = [
+            "-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$2\"",
+            "sh", String(ProcessInfo.processInfo.processIdentifier), Bundle.main.bundleURL.path
+        ]
+        do {
+            try p.run()
+            NSApp.terminate(nil)
+        } catch {
+            phase = .failed(.installFailed)
+        }
+    }
+
+    // MARK: Networking
+
+    private struct GitHubRelease: Decodable {
+        struct Asset: Decodable {
+            let name: String
+            let browserDownloadUrl: URL
+        }
+        let tagName: String
+        let htmlUrl: URL
+        let assets: [Asset]
+    }
+
+    nonisolated private static func request(_ url: URL) -> URLRequest {
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        req.setValue("NowBar", forHTTPHeaderField: "User-Agent")
+        return req
+    }
+
+    nonisolated private static func fetchLatest() async throws -> ReleaseInfo {
+        let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!
+        var req = request(url)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError.network }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let release = try decoder.decode(GitHubRelease.self, from: data)
+        guard let dmg = release.assets.first(where: { $0.name == dmgName }) else { throw UpdateError.noAsset }
+        let version = release.tagName.hasPrefix("v") ? String(release.tagName.dropFirst()) : release.tagName
+        return ReleaseInfo(
+            version: version,
+            pageURL: release.htmlUrl,
+            dmgURL: dmg.browserDownloadUrl,
+            checksumURL: release.assets.first(where: { $0.name == checksumName })?.browserDownloadUrl
+        )
+    }
+
+    nonisolated private static func fetchChecksum(_ url: URL) async throws -> String {
+        guard let (data, response) = try? await URLSession.shared.data(for: request(url)),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let text = String(data: data, encoding: .utf8),
+              let hash = text.split(whereSeparator: \.isWhitespace).first
+        else { throw UpdateError.network }
+        return hash.lowercased()
+    }
+
+    // Streams to disk while hashing, so progress and SHA-256 come from a single pass.
+    nonisolated private static func download(
+        _ url: URL,
+        to dest: URL,
+        onProgress: @escaping (Int64, Int64) -> Void
+    ) async throws -> String {
+        guard let (bytes, response) = try? await URLSession.shared.bytes(for: request(url)),
+              (response as? HTTPURLResponse)?.statusCode == 200
+        else { throw UpdateError.network }
+        let total = response.expectedContentLength
+        guard FileManager.default.createFile(atPath: dest.path, contents: nil),
+              let handle = try? FileHandle(forWritingTo: dest)
+        else { throw UpdateError.installFailed }
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        var buffer = Data()
+        buffer.reserveCapacity(chunkSize)
+        var received: Int64 = 0
+        do {
+            for try await byte in bytes {
+                buffer.append(byte)
+                if buffer.count >= chunkSize {
+                    hasher.update(data: buffer)
+                    try handle.write(contentsOf: buffer)
+                    received += Int64(buffer.count)
+                    buffer.removeAll(keepingCapacity: true)
+                    onProgress(received, total)
+                }
+            }
+        } catch {
+            throw UpdateError.network
+        }
+        hasher.update(data: buffer)
+        try handle.write(contentsOf: buffer)
+        received += Int64(buffer.count)
+        onProgress(received, total)
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: Install
+
+    nonisolated private static var workDir: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.canai.nowbar")
+            .appendingPathComponent("Update")
+    }
+
+    nonisolated private static func cleanWorkDir() {
+        try? FileManager.default.removeItem(at: workDir)
+    }
+
+    nonisolated private static func makeWorkDir() throws -> URL {
+        cleanWorkDir()
+        do {
+            try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        } catch {
+            throw UpdateError.installFailed
+        }
+        return workDir
+    }
+
+    nonisolated private static func canReplaceRunningApp() -> Bool {
+        let current = Bundle.main.bundleURL
+        return current.pathExtension == "app"
+            && FileManager.default.isWritableFile(atPath: current.deletingLastPathComponent().path)
+    }
+
+    nonisolated private static func extractApp(from dmg: URL, into dir: URL) async throws -> URL {
+        let plist = try await runTool(
+            "/usr/bin/hdiutil",
+            ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-plist"],
+            failure: .badPackage
+        )
+        guard let root = try? PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any],
+              let entities = root["system-entities"] as? [[String: Any]],
+              let mountPoint = entities.compactMap({ $0["mount-point"] as? String }).first
+        else { throw UpdateError.badPackage }
+
+        let staged = dir.appendingPathComponent("NowBar.app")
+        let copied = try? await runTool(
+            "/usr/bin/ditto",
+            [URL(fileURLWithPath: mountPoint).appendingPathComponent("NowBar.app").path, staged.path],
+            failure: .badPackage
+        )
+        _ = try? await runTool("/usr/bin/hdiutil", ["detach", mountPoint, "-quiet", "-force"], failure: .badPackage)
+        guard copied != nil,
+              Bundle(url: staged)?.bundleIdentifier == Bundle.main.bundleIdentifier
+        else { throw UpdateError.badPackage }
+
+        _ = try await runTool("/usr/bin/codesign", ["--verify", "--deep", staged.path], failure: .badPackage)
+        _ = try? await runTool("/usr/bin/xattr", ["-cr", staged.path], failure: .badPackage)
+        return staged
+    }
+
+    nonisolated private static func replaceRunningApp(with staged: URL, backupDir: URL) async throws {
+        let fm = FileManager.default
+        let current = Bundle.main.bundleURL
+        let backup = backupDir.appendingPathComponent("NowBar-previous.app")
+        try? fm.removeItem(at: backup)
+        do {
+            try fm.moveItem(at: current, to: backup)
+        } catch {
+            throw UpdateError.notWritable
+        }
+        do {
+            try fm.moveItem(at: staged, to: current)
+        } catch {
+            try? fm.moveItem(at: backup, to: current)
+            throw UpdateError.installFailed
+        }
+    }
+
+    nonisolated private static func runTool(_ path: String, _ args: [String], failure: UpdateError) async throws -> Data {
+        try await withCheckedThrowingContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: path)
+                p.arguments = args
+                let pipe = Pipe()
+                p.standardOutput = pipe
+                p.standardError = FileHandle.nullDevice
+                do {
+                    try p.run()
+                } catch {
+                    cont.resume(throwing: failure)
+                    return
+                }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                if p.terminationStatus == 0 {
+                    cont.resume(returning: data)
+                } else {
+                    cont.resume(throwing: failure)
+                }
+            }
+        }
+    }
+
+    nonisolated static func isNewer(_ candidate: String, than current: String) -> Bool {
+        let a = candidate.split(separator: ".").map { Int($0) ?? 0 }
+        let b = current.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(a.count, b.count) {
+            let x = i < a.count ? a[i] : 0
+            let y = i < b.count ? b[i] : 0
+            if x != y { return x > y }
+        }
+        return false
+    }
+}
+
 // MARK: - Shared state
 
 final class SpotifyState: ObservableObject {
@@ -1523,7 +1914,7 @@ final class SpotifyState: ObservableObject {
 
 // MARK: - UI state
 
-enum PanelMode { case player, settings, contextMenu, stats, statsData, setup }
+enum PanelMode { case player, settings, contextMenu, stats, statsData, setup, update }
 
 final class UIState: ObservableObject {
     @Published var mode: PanelMode = .player
@@ -1536,14 +1927,26 @@ struct RootView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var ui: UIState
     @ObservedObject var stats: StatsStore
+    @ObservedObject var updater: Updater
     let onQuit: () -> Void
 
     var body: some View {
         switch ui.mode {
         case .player:
-            PopoverView(state: state, settings: settings, onOpenSetup: { ui.mode = .setup })
+            PopoverView(
+                state: state,
+                settings: settings,
+                updater: updater,
+                onOpenSetup: { ui.mode = .setup },
+                onOpenUpdate: { ui.mode = .update }
+            )
         case .settings:
-            SettingsView(settings: settings, onOpenStats: { ui.mode = .stats })
+            SettingsView(
+                settings: settings,
+                updater: updater,
+                onOpenStats: { ui.mode = .stats },
+                onOpenUpdate: { ui.mode = .update }
+            )
         case .contextMenu:
             ContextMenuView(
                 lang: settings.language,
@@ -1568,6 +1971,12 @@ struct RootView: View {
             SetupWizardView(
                 settings: settings,
                 onDone: { ui.mode = .player }
+            )
+        case .update:
+            UpdateView(
+                updater: updater,
+                settings: settings,
+                onBack: { ui.mode = .settings }
             )
         }
     }
@@ -1805,7 +2214,9 @@ struct MarqueeText: View {
 struct PopoverView: View {
     @ObservedObject var state: SpotifyState
     @ObservedObject var settings: AppSettings
+    @ObservedObject var updater: Updater
     var onOpenSetup: () -> Void = {}
+    var onOpenUpdate: () -> Void = {}
     @State private var accent: Color? = nil
     @State private var bannerDismissed = false
     @State private var anyBrowserUnconfigured = false
@@ -1828,6 +2239,12 @@ struct PopoverView: View {
                 .padding(.horizontal, 10)
                 .padding(.top, 10)
                 .frame(width: 360)
+            }
+            if updater.latest != nil && !updater.bannerDismissed {
+                UpdateBanner(updater: updater, lang: settings.language, onOpen: onOpenUpdate)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 10)
+                    .frame(width: 360)
             }
             contentBody(t: t)
         }
@@ -2451,7 +2868,9 @@ struct SettingsRow: View {
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var updater: Updater
     let onOpenStats: () -> Void
+    let onOpenUpdate: () -> Void
 
     var body: some View {
         let lang = settings.language
@@ -2500,6 +2919,7 @@ struct SettingsView: View {
             }
             Divider()
             NavRow(label: tr("stats", lang), action: onOpenStats)
+            NavRow(label: tr("updates", lang), badge: updater.latest != nil, action: onOpenUpdate)
         }
         .font(.system(size: 11))
         .padding(12)
@@ -2509,6 +2929,7 @@ struct SettingsView: View {
 
 struct NavRow: View {
     let label: String
+    var badge = false
     let action: () -> Void
     @State private var hover = false
 
@@ -2517,6 +2938,9 @@ struct NavRow: View {
             HStack {
                 Text(label)
                 Spacer()
+                if badge {
+                    Circle().fill(.green).frame(width: 6, height: 6)
+                }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -2622,6 +3046,226 @@ struct StatsView: View {
                 .buttonStyle(.plain)
             }
             .padding(.top, 4)
+        }
+    }
+}
+
+// MARK: - Update views
+
+struct UpdateView: View {
+    @ObservedObject var updater: Updater
+    @ObservedObject var settings: AppSettings
+    let onBack: () -> Void
+
+    var body: some View {
+        let lang = settings.language
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                Text(tr("updates", lang))
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            Divider()
+            SettingsRow(label: tr("auto_check_updates", lang), value: $settings.autoCheckUpdates)
+            HStack {
+                Text(tr("current_version", lang))
+                Spacer()
+                Text(updater.currentVersion)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Divider()
+            if let step = updater.currentStep {
+                progressSection(step: step, lang: lang)
+            } else {
+                statusSection(lang: lang)
+            }
+        }
+        .font(.system(size: 11))
+        .padding(12)
+        .frame(width: 280)
+        .animation(.easeOut(duration: 0.15), value: updater.currentStep)
+    }
+
+    @ViewBuilder
+    private func statusSection(lang: String) -> some View {
+        if let latest = updater.latest {
+            HStack {
+                Text(String(format: tr("update_available", lang), latest.version))
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Link(tr("update_release_notes", lang), destination: latest.pageURL)
+                    .font(.system(size: 10))
+            }
+        }
+        if case .failed(let error) = updater.phase {
+            Label(tr(error.rawValue, lang), systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 10))
+                .fixedSize(horizontal: false, vertical: true)
+        } else if updater.phase == .upToDate {
+            Label(tr("update_up_to_date", lang), systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.secondary)
+        }
+        HStack {
+            Spacer()
+            if updater.phase == .checking {
+                ProgressView().controlSize(.small)
+                Text(tr("update_checking", lang)).foregroundStyle(.secondary)
+            } else if case .failed = updater.phase {
+                Button(tr("update_retry", lang)) { updater.retry() }
+                    .controlSize(.small)
+            } else if updater.latest != nil {
+                Button(tr("update_install", lang)) { updater.install() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.small)
+            } else {
+                Button(tr("check_updates", lang)) { updater.check() }
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func progressSection(step: UpdateStep, lang: String) -> some View {
+        if let latest = updater.latest {
+            Text(String(format: tr("update_available", lang), latest.version))
+                .font(.system(size: 12, weight: .semibold))
+        }
+        UpdateStepsView(current: step, finished: updater.phase == .readyToRestart, lang: lang)
+        switch updater.phase {
+        case .downloading(let received, let total):
+            if total > 0 {
+                ProgressView(value: Double(received), total: Double(total))
+            } else {
+                ProgressView().progressViewStyle(.linear)
+            }
+            HStack {
+                Text(tr("update_downloading", lang))
+                Spacer()
+                Text(Self.byteProgress(received: received, total: total))
+                    .monospacedDigit()
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+        case .verifying, .installing:
+            ProgressView().progressViewStyle(.linear)
+            Text(tr(updater.phase == .verifying ? "update_verifying" : "update_installing", lang))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        default:
+            ProgressView(value: 1).tint(.green)
+            Text(tr("update_ready", lang))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button(tr("update_restart", lang)) { updater.restart() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private static func byteProgress(received: Int64, total: Int64) -> String {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        guard total > 0 else { return f.string(fromByteCount: received) }
+        let percent = Int(Double(received) / Double(total) * 100)
+        return "\(percent)% · \(f.string(fromByteCount: received)) / \(f.string(fromByteCount: total))"
+    }
+}
+
+struct UpdateStepsView: View {
+    let current: UpdateStep
+    let finished: Bool
+    let lang: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(UpdateStep.allCases, id: \.self) { step in
+                VStack(spacing: 3) {
+                    icon(for: step)
+                        .font(.system(size: 13))
+                    Text(tr(step.labelKey, lang))
+                        .font(.system(size: 9, weight: step == current ? .semibold : .regular))
+                        .foregroundStyle(step.rawValue > current.rawValue ? .tertiary : .primary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func icon(for step: UpdateStep) -> some View {
+        if step.rawValue < current.rawValue || (finished && step == current) {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        } else if step == current {
+            Image(systemName: "circle.dotted.circle").foregroundStyle(Color.accentColor)
+        } else {
+            Image(systemName: "circle").foregroundStyle(.tertiary)
+        }
+    }
+}
+
+struct UpdateBanner: View {
+    @ObservedObject var updater: Updater
+    let lang: String
+    let onOpen: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(String(format: tr("update_available", lang), updater.latest?.version ?? ""))
+                    .font(.system(size: 11, weight: .semibold))
+                subtitle
+            }
+            Spacer()
+            if updater.phase == .readyToRestart {
+                Button(tr("update_restart", lang)) { updater.restart() }
+                    .controlSize(.small)
+            } else {
+                Button(tr("update_view", lang), action: onOpen)
+                    .controlSize(.small)
+            }
+            if !updater.isBusy && updater.phase != .readyToRestart {
+                Button {
+                    updater.bannerDismissed = true
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.green.opacity(0.12)))
+    }
+
+    @ViewBuilder
+    private var subtitle: some View {
+        switch updater.phase {
+        case .downloading(let received, let total) where total > 0:
+            ProgressView(value: Double(received), total: Double(total))
+                .controlSize(.small)
+                .frame(width: 140)
+        case .downloading, .verifying, .installing:
+            ProgressView().progressViewStyle(.linear).controlSize(.small).frame(width: 140)
+        case .readyToRestart:
+            Text(tr("update_ready", lang))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        default:
+            EmptyView()
         }
     }
 }
@@ -3127,6 +3771,7 @@ final class PanelContainerView: NSView {
 
 // MARK: - App delegate
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: NSPanel!
@@ -3136,6 +3781,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let ui = UIState()
     private let stats = StatsStore()
     private let toast = ToastController()
+    private let updater = Updater()
+    private var updaterCancellable: AnyCancellable?
     private var refreshTimer: Timer?
     private var tickTimer: Timer?
     private var outsideClickMonitor: Any?
@@ -3159,6 +3806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings: settings,
             ui: ui,
             stats: stats,
+            updater: updater,
             onQuit: { NSApp.terminate(nil) }
         ))
 
@@ -3251,6 +3899,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in
                 DispatchQueue.main.async { self?.resizePanelForMode() }
             }
+
+        // Update banners and progress rows change the panel height without a mode change.
+        updaterCancellable = updater.objectWillChange
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.resizePanelForMode() }
+            }
+        updater.settings = settings
+        updater.start()
 
         if !settings.onboardingCompleted {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
@@ -3398,7 +4054,7 @@ if !running.isEmpty {
 }
 
 let app = NSApplication.shared
-let delegate = AppDelegate()
+let delegate = MainActor.assumeIsolated { AppDelegate() }
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()
