@@ -1363,6 +1363,51 @@ enum MRCommand {
     static let previousTrack: Int32 = 5
 }
 
+// MARK: - Source launcher
+
+enum SourceLauncher {
+    static func open(_ t: SpotifyTrack) {
+        if t.isMusic { MusicAPI.reveal() }
+        activateAndUnminimize(appName: t.appName, bundleID: t.bundleID)
+    }
+
+    static func openApp(bundleID: String) {
+        let name = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
+            ?? (NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)?.deletingPathExtension().lastPathComponent)
+            ?? ""
+        activateAndUnminimize(appName: name, bundleID: bundleID)
+    }
+
+    private static func activateAndUnminimize(appName: String, bundleID: String) {
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            let cfg = NSWorkspace.OpenConfiguration()
+            cfg.activates = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: cfg, completionHandler: nil)
+        }
+        guard !appName.isEmpty else { return }
+        let src = """
+        tell application "\(appName)"
+            activate
+            try
+                repeat with w in windows
+                    try
+                        set miniaturized of w to false
+                    end try
+                    try
+                        set visible of w to true
+                    end try
+                end repeat
+            end try
+            try
+                reopen
+            end try
+        end tell
+        """
+        var err: NSDictionary?
+        NSAppleScript(source: src)?.executeAndReturnError(&err)
+    }
+}
+
 // MARK: - Shared state
 
 final class SpotifyState: ObservableObject {
@@ -1798,12 +1843,12 @@ struct PopoverView: View {
                         .foregroundStyle(.secondary)
                     HStack(spacing: 10) {
                         Button(tr("open_spotify", settings.language)) {
-                            openApp(bundleID: "com.spotify.client")
+                            SourceLauncher.openApp(bundleID: "com.spotify.client")
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.green)
                         Button(tr("open_music", settings.language)) {
-                            openApp(bundleID: "com.apple.Music")
+                            SourceLauncher.openApp(bundleID: "com.apple.Music")
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.pink)
@@ -1817,7 +1862,7 @@ struct PopoverView: View {
                     }
                     HStack(alignment: .top, spacing: 12) {
                         if settings.showImage {
-                            Button { openSource(t) } label: {
+                            Button { SourceLauncher.open(t) } label: {
                                 AlbumArtView(
                                     url: t.artUrl,
                                     data: t.artworkData,
@@ -1832,7 +1877,7 @@ struct PopoverView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             if settings.showTitle {
-                                Button { openSource(t) } label: {
+                                Button { SourceLauncher.open(t) } label: {
                                     MarqueeText(text: t.name, font: .system(size: 13, weight: .semibold))
                                 }
                                 .buttonStyle(.plain)
@@ -1932,47 +1977,6 @@ struct PopoverView: View {
         if t.isSpotify { SpotifyAPI.perform("next track"); return }
         if t.isMusic { MusicAPI.perform("next track"); return }
         BrowserJS.next(bundleID: t.bundleID)
-    }
-
-    private func openSource(_ t: SpotifyTrack) {
-        if t.isMusic { MusicAPI.reveal() }
-        activateAndUnminimize(appName: t.appName, bundleID: t.bundleID)
-    }
-
-    private func openApp(bundleID: String) {
-        let name = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
-            ?? (NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)?.deletingPathExtension().lastPathComponent)
-            ?? ""
-        activateAndUnminimize(appName: name, bundleID: bundleID)
-    }
-
-    private func activateAndUnminimize(appName: String, bundleID: String) {
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-            let cfg = NSWorkspace.OpenConfiguration()
-            cfg.activates = true
-            NSWorkspace.shared.openApplication(at: appURL, configuration: cfg, completionHandler: nil)
-        }
-        guard !appName.isEmpty else { return }
-        let src = """
-        tell application "\(appName)"
-            activate
-            try
-                repeat with w in windows
-                    try
-                        set miniaturized of w to false
-                    end try
-                    try
-                        set visible of w to true
-                    end try
-                end repeat
-            end try
-            try
-                reopen
-            end try
-        end tell
-        """
-        var err: NSDictionary?
-        NSAppleScript(source: src)?.executeAndReturnError(&err)
     }
 
     @ViewBuilder
@@ -2624,13 +2628,48 @@ struct StatsView: View {
 
 // MARK: - Toast
 
+final class ToastModel: ObservableObject {
+    @Published var track: SpotifyTrack = .off
+    @Published var lang: String = "en"
+    @Published var hovering = false
+}
+
+struct VisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = .behindWindow
+        v.state = .active
+        return v
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
+        nsView.material = material
+    }
+}
+
 struct ToastView: View {
-    let track: SpotifyTrack
-    let lang: String
+    @ObservedObject var model: ToastModel
+    let onClose: () -> Void
+    let onDragChanged: () -> Void
+    let onDragEnded: () -> Void
+
+    // Transparent margin around the card so the close bubble can overhang its corner.
+    static let inset: CGFloat = 8
+    private let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
 
     var body: some View {
+        card
+            .overlay(alignment: .topLeading) { closeButton }
+            .padding(Self.inset)
+            .animation(.easeOut(duration: 0.12), value: model.hovering)
+    }
+
+    private var card: some View {
         HStack(spacing: 10) {
-            AsyncImage(url: URL(string: track.artUrl)) { phase in
+            AsyncImage(url: URL(string: model.track.artUrl)) { phase in
                 switch phase {
                 case .success(let img):
                     img.resizable().aspectRatio(contentMode: .fill)
@@ -2642,15 +2681,15 @@ struct ToastView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(tr("now_playing", lang))
+                Text(tr("now_playing", model.lang))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.tertiary)
                     .textCase(.uppercase)
                     .tracking(0.5)
-                Text(track.name)
+                Text(model.track.name)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
-                Text(track.artist)
+                Text(model.track.artist)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -2659,25 +2698,98 @@ struct ToastView: View {
         }
         .padding(10)
         .frame(width: 270)
+        .background(VisualEffectBackground(material: .menu))
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .contentShape(shape)
+        // Single gesture handles both tap (open source) and horizontal swipe (dismiss);
+        // the controller tells them apart by travelled distance.
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in onDragChanged() }
+                .onEnded { _ in onDragEnded() }
+        )
+    }
+
+    @ViewBuilder
+    private var closeButton: some View {
+        if model.hovering {
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .background(VisualEffectBackground(material: .menu).clipShape(Circle()))
+                    .overlay(Circle().strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .offset(x: -7, y: -7)
+            .transition(.opacity.combined(with: .scale(scale: 0.6)))
+        }
     }
 }
 
+// Tracks hover at the AppKit level: the toast panel never becomes key, so an
+// always-active tracking area is more reliable than SwiftUI's onHover here.
+final class ToastContainerView: NSView {
+    var onHover: ((Bool) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+}
+
 final class ToastController {
+    private struct DragState {
+        let startMouseX: CGFloat
+        var lastMouseX: CGFloat
+        var lastTime: TimeInterval
+        var velocity: CGFloat
+        var isSwiping: Bool
+    }
+
+    private static let displayDuration: TimeInterval = 3
+    private static let resumeDuration: TimeInterval = 2
+    private static let tapTolerance: CGFloat = 4
+    private static let dismissDistance: CGFloat = 70
+    private static let dismissVelocity: CGFloat = 600
+
     private var panel: NSPanel?
     private var hosting: NSHostingController<ToastView>?
+    private let model = ToastModel()
     private var hideWork: DispatchWorkItem?
+    private var restOrigin: NSPoint = .zero
+    private var drag: DragState?
+    private var isDismissing = false
+    // Bumped on every show so a fade-out completing late doesn't hide a newer toast.
+    private var generation = 0
 
     func show(track: SpotifyTrack, position: String, lang: String) {
-        build(lang: lang)
+        build()
         guard let panel, let hosting else { return }
-        hosting.rootView = ToastView(track: track, lang: lang)
+        generation += 1
+        isDismissing = false
+        drag = nil
+        model.track = track
+        model.lang = lang
         hosting.view.layoutSubtreeIfNeeded()
         let size = hosting.view.fittingSize
         panel.setContentSize(size)
 
         guard let screen = NSScreen.main else { return }
         let visible = screen.visibleFrame
-        let margin: CGFloat = 12
+        let margin: CGFloat = 12 - ToastView.inset
         let origin: NSPoint
         switch position {
         case "topLeft":
@@ -2689,9 +2801,12 @@ final class ToastController {
         default:
             origin = NSPoint(x: visible.maxX - size.width - margin, y: visible.minY + margin)
         }
+        restOrigin = origin
         panel.setFrameOrigin(origin)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
+        panel.invalidateShadow()
+        model.hovering = panel.frame.contains(NSEvent.mouseLocation)
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
@@ -2699,29 +2814,125 @@ final class ToastController {
             panel.animator().alphaValue = 1
         }
 
+        if model.hovering {
+            hideWork?.cancel()
+        } else {
+            scheduleHide(after: Self.displayDuration)
+        }
+    }
+
+    private func scheduleHide(after delay: TimeInterval) {
         hideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.hide() }
         hideWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func hide() {
-        guard let panel else { return }
+        guard let panel, !isDismissing else { return }
+        isDismissing = true
+        hideWork?.cancel()
+        let gen = generation
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.25
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
-        }, completionHandler: { [weak panel] in
+        }, completionHandler: { [weak self, weak panel] in
+            guard self?.generation == gen else { return }
             panel?.orderOut(nil)
         })
     }
 
-    private func build(lang: String) {
+    private func slideOut(direction: CGFloat) {
+        guard let panel, !isDismissing else { return }
+        isDismissing = true
+        hideWork?.cancel()
+        let gen = generation
+        var target = panel.frame
+        target.origin.x = restOrigin.x + direction * (target.width + 40)
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(target, display: true)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self, weak panel] in
+            guard self?.generation == gen else { return }
+            panel?.orderOut(nil)
+        })
+    }
+
+    private func setHovering(_ hovering: Bool) {
+        guard !isDismissing else { return }
+        model.hovering = hovering
+        if hovering {
+            hideWork?.cancel()
+        } else if drag == nil {
+            scheduleHide(after: Self.resumeDuration)
+        }
+    }
+
+    private func openSource() {
+        let track = model.track
+        hide()
+        SourceLauncher.open(track)
+    }
+
+    private func dragChanged() {
+        guard let panel, !isDismissing else { return }
+        let x = NSEvent.mouseLocation.x
+        let now = ProcessInfo.processInfo.systemUptime
+        guard var d = drag else {
+            drag = DragState(startMouseX: x, lastMouseX: x, lastTime: now, velocity: 0, isSwiping: false)
+            hideWork?.cancel()
+            return
+        }
+        let dt = now - d.lastTime
+        if dt > 0 { d.velocity = (x - d.lastMouseX) / CGFloat(dt) }
+        d.lastMouseX = x
+        d.lastTime = now
+        let dx = x - d.startMouseX
+        if abs(dx) > Self.tapTolerance { d.isSwiping = true }
+        drag = d
+        guard d.isSwiping else { return }
+        panel.setFrameOrigin(NSPoint(x: restOrigin.x + dx, y: restOrigin.y))
+        panel.alphaValue = max(0.2, 1 - abs(dx) / 220)
+    }
+
+    private func dragEnded() {
+        guard let panel, let d = drag, !isDismissing else { drag = nil; return }
+        drag = nil
+        guard d.isSwiping else {
+            openSource()
+            return
+        }
+        let dx = d.lastMouseX - d.startMouseX
+        // Ignore velocity if the pointer paused before release.
+        let stale = ProcessInfo.processInfo.systemUptime - d.lastTime > 0.1
+        let flung = !stale && abs(d.velocity) > Self.dismissVelocity && (d.velocity > 0) == (dx > 0)
+        if abs(dx) > Self.dismissDistance || flung {
+            slideOut(direction: dx < 0 ? -1 : 1)
+            return
+        }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrameOrigin(restOrigin)
+            panel.animator().alphaValue = 1
+        }
+        if !model.hovering { scheduleHide(after: Self.resumeDuration) }
+    }
+
+    private func build() {
         if panel != nil { return }
-        let h = NSHostingController(rootView: ToastView(track: .off, lang: lang))
+        let h = NSHostingController(rootView: ToastView(
+            model: model,
+            onClose: { [weak self] in self?.hide() },
+            onDragChanged: { [weak self] in self?.dragChanged() },
+            onDragEnded: { [weak self] in self?.dragEnded() }
+        ))
         h.sizingOptions = [.preferredContentSize]
         let p = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 260, height: 62),
+            contentRect: NSRect(x: 0, y: 0, width: 286, height: 78),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -2731,26 +2942,13 @@ final class ToastController {
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = true
-        p.ignoresMouseEvents = true
+        p.hidesOnDeactivate = false
 
-        let container = NSView(frame: p.contentView!.bounds)
-        container.wantsLayer = true
-        container.layer?.cornerRadius = 10
-        container.layer?.cornerCurve = .continuous
-        container.layer?.masksToBounds = true
-        container.layer?.borderWidth = 0.5
-        container.layer?.borderColor = NSColor.separatorColor.cgColor
-
-        let vibrant = NSVisualEffectView(frame: container.bounds)
-        vibrant.material = .menu
-        vibrant.blendingMode = .behindWindow
-        vibrant.state = .active
-        vibrant.autoresizingMask = [.width, .height]
-
-        h.view.frame = vibrant.bounds
+        let container = ToastContainerView(frame: p.contentView!.bounds)
+        container.onHover = { [weak self] in self?.setHovering($0) }
+        h.view.frame = container.bounds
         h.view.autoresizingMask = [.width, .height]
-        vibrant.addSubview(h.view)
-        container.addSubview(vibrant)
+        container.addSubview(h.view)
         p.contentView = container
 
         panel = p
