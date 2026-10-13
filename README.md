@@ -31,6 +31,7 @@ Si prefieres compilar desde código, ve a [Instalación desde cero](#instalació
 - Multi-fuente: también detecta y controla audio que se reproduce en navegadores (YouTube, YouTube Music, SoundCloud, Spotify Web, Twitch, Netflix, Vimeo, Bandcamp, Deezer, Tidal, Apple Music web, etc.)
 - Apple Music (Music.app) soportado como fuente primaria (igual que Spotify): controles completos, shuffle/repeat, artwork vía iTunes Search API
 - Hacer click en la portada o en el título abre la app fuente con la canción seleccionada (Music.app usa `reveal`)
+- Aviso al cambiar canción interactivo: click abre la app fuente, deslizar hacia los lados lo descarta y al pasar el mouse aparece una X para cerrarlo (el aviso no se oculta mientras el mouse está encima)
 
 ## Navegadores soportados
 
