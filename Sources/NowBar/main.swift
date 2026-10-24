@@ -1929,8 +1929,18 @@ struct RootView: View {
     @ObservedObject var stats: StatsStore
     @ObservedObject var updater: Updater
     let onQuit: () -> Void
+    var onSizeChange: (CGSize) -> Void = { _ in }
 
     var body: some View {
+        content
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: PanelSizeKey.self, value: geo.size)
+            })
+            .onPreferenceChange(PanelSizeKey.self, perform: onSizeChange)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch ui.mode {
         case .player:
             PopoverView(
@@ -1980,6 +1990,11 @@ struct RootView: View {
             )
         }
     }
+}
+
+struct PanelSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 // MARK: - Context menu view
@@ -3782,11 +3797,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let stats = StatsStore()
     private let toast = ToastController()
     private let updater = Updater()
-    private var updaterCancellable: AnyCancellable?
     private var refreshTimer: Timer?
     private var tickTimer: Timer?
     private var outsideClickMonitor: Any?
-    private var modeCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.global(qos: .utility).async {
@@ -3807,7 +3820,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ui: ui,
             stats: stats,
             updater: updater,
-            onQuit: { NSApp.terminate(nil) }
+            onQuit: { NSApp.terminate(nil) },
+            // Fires after SwiftUI renders a new mode/banner, so the panel never keeps a stale size.
+            onSizeChange: { [weak self] _ in
+                DispatchQueue.main.async { self?.resizePanelForMode() }
+            }
         ))
 
         state.onTrackChange = { [weak self] track in
@@ -3894,17 +3911,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
-        modeCancellable = ui.$mode
-            .dropFirst()
-            .sink { [weak self] _ in
-                DispatchQueue.main.async { self?.resizePanelForMode() }
-            }
-
-        // Update banners and progress rows change the panel height without a mode change.
-        updaterCancellable = updater.objectWillChange
-            .sink { [weak self] _ in
-                DispatchQueue.main.async { self?.resizePanelForMode() }
-            }
         updater.settings = settings
         updater.start()
 
